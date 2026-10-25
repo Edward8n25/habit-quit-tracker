@@ -338,6 +338,10 @@ quit-tracker/
 - [x] 新增 `tests/style-consistency.js` 样式守门（8 项检查 + 棘轮阈值，防止收敛后重新退化）
 - [x] 冒烟测试 47 → **55 项**，样式守门 8 / 8
 
+### 已完成（1.0.1 同源缓存互删防护，2026-10-25）
+
+- [x] **SW activate 只清理 `quit-tracker-` 前缀缓存**：GitHub Pages 项目站共享 origin，无差别清理会删掉同 origin 其他项目（如 [SubTrack](https://edward8n25.github.io/subscription-manager/)）的离线缓存；新增 `tests/assert-sw.js`（4 断言）
+
 ### 已完成（1.0.0 正式版，2026-10-25）
 
 - [x] **版本口径确立**：开发期 v1–v6.1 → 0.1.0–0.6.1，当前 **1.0.0**；设置面板小字显示版本号

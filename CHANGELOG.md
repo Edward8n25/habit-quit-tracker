@@ -18,6 +18,14 @@
 - 省钱可视化（单次破戒成本 + 累计花费）
 - 跨设备同步（WebDAV 坚果云，可选）
 
+## [1.0.1] - 2026-10-25
+
+### 修复
+- **Service Worker 同源缓存互删防护**：GitHub Pages 项目站共享 `edward8n25.github.io` origin，SW activate 原「无差别清理一切非本应用缓存」会删掉同 origin 其他项目（如 [subscription-manager](https://edward8n25.github.io/subscription-manager/)）的离线缓存，反之亦然。现只清理 `quit-tracker-` 前缀的旧缓存。离线策略本身不变（导航 / 静态均 network-first + 缓存回退）。
+
+### 测试
+- 新增 `tests/assert-sw.js`（4 断言：前缀过滤 / CACHE 名带前缀 / SW 注册存在 / APP_VERSION 对应）。
+
 ---
 
 ## [1.0.0] - 2026-10-25

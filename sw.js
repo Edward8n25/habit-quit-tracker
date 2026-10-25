@@ -25,7 +25,9 @@ self.addEventListener('install', (e) => {
 self.addEventListener('activate', (e) => {
   e.waitUntil(
     caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))
+      // 只清理自己前缀的旧缓存：GitHub Pages 项目站共享 origin，
+      // 无差别清理会删掉同 origin 其他项目（如 subscription-manager）的缓存
+      Promise.all(keys.filter((k) => k.startsWith('quit-tracker-') && k !== CACHE).map((k) => caches.delete(k)))
     ).then(() => self.clients.claim())
   );
 });
