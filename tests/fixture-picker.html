@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>picker fixture</title></head>
+<body>
+<pre id="out">PENDING</pre>
+<iframe id="f" width="390" height="844"></iframe>
+<script>
+/* 真浏览器夹具：iframe 加载真实 index.html，脚本化点击真实 DOM。
+   结果写入 <pre id="out">，由 `msedge --headless --dump-dom` 抓回。 */
+var log = [];
+function rec(name, ok, extra) {
+  log.push((ok ? 'PASS' : 'FAIL') + ' | ' + name + (extra ? ' | ' + extra : ''));
+}
+function flush() { document.getElementById('out').textContent = log.join('\n'); }
+
+var out = document.getElementById('out');
+var f = document.getElementById('f');
+
+/* 安全守卫：本夹具只在显式带 ?run=1 时执行（tests/browser-picker.js 会带上）。
+   tests/ 会随 GitHub Pages 一起发布；不加守卫的话，访客误开此页会清掉自己的本地数据。 */
+var shouldRun = false;
+try { shouldRun = new URLSearchParams(location.search).get('run') === '1'; } catch (e) {}
+
+if (!shouldRun) {
+  out.textContent = 'SKIPPED | 未带 ?run=1，夹具未执行（安全守卫：避免误清访客本地数据）';
+} else {
+  runFixture();
+}
+
+function runFixture() {
+  // 只清本应用占用的 key，不用 localStorage.clear() —— 同源下可能有别的应用数据
+  ['quit-tracker-v1', 'quit-tracker-v1.bak', 'quit-tracker-theme', 'quit-tracker-accent', 'quit-tracker-demo']
+    .forEach(function (k) { try { localStorage.removeItem(k); } catch (e) {} });
+
+  f.onload = function () {
+  try {
+    var w = f.contentWindow, d = f.contentDocument;
+    var qt = w.__qt;
+    rec('app 已初始化', !!qt && typeof qt.openEditProject === 'function');
+    rec('配色：默认 data-accent=green', d.documentElement.getAttribute('data-accent') === 'green');
+
+    /* ---------- 滚动位置记忆：进详情再返回，恢复离开时的位置 ---------- */
+    w.scrollTo(0, 150);
+    qt.openDetail('demo1');
+    qt.goHome();
+    rec('滚动记忆：返回后恢复到离开时的位置（~150px）', w.pageYOffset >= 100 && w.pageYOffset <= 200, 'scrollY=' + w.pageYOffset);
+
+    if (!qt) { flush(); return; }
+
+    /* ---------- A. 编辑已有项目：弹窗内应有分类管理入口 ---------- */
+    qt.openEditProject('demo1');
+    var picker = d.querySelector('#qt-cat');
+    rec('编辑弹窗：分类容器存在', !!picker);
+    rec('编辑弹窗：有「＋ 新建」入口', !!d.querySelector('#qt-cat-new-btn'));
+    rec('编辑弹窗：有「管理」入口', !!d.querySelector('#qt-cat-manage-btn'));
+
+    /* ---------- A2. 弹窗防误关：点遮罩必须不关闭 ---------- */
+    d.querySelector('.modal-back').click();
+    rec('弹窗防误关：点遮罩后弹窗仍在（正在输入的内容不丢）', !!d.querySelector('#qt-name'));
+
+    /* ---------- B. 点「＋ 新建」→ 切到内联输入态 ---------- */
+    var nb = d.querySelector('#qt-cat-new-btn');
+    if (nb) nb.click();
+    var inline = d.querySelector('#qt-cat-inline');
+    rec('点新建 → 出现内联输入框', !!inline);
+    rec('点新建 → 出现「添加」按钮', !!d.querySelector('#qt-cat-inline-ok'));
+
+    /* ---------- C. 输入 → 添加 → 落盘并自动选中 ---------- */
+    if (inline) { inline.value = '宵夜'; }
+    var okBtn = d.querySelector('#qt-cat-inline-ok');
+    if (okBtn) okBtn.click();
+
+    var chips = Array.prototype.slice.call(d.querySelectorAll('#qt-cat .tag-opt'));
+    rec('添加后：新分类出现在选择器',
+        chips.some(function (c) { return c.textContent.indexOf('宵夜') >= 0; }),
+        'chips=' + chips.map(function (c) { return c.textContent.trim(); }).join(','));
+    var sel = chips.filter(function (c) { return c.classList.contains('selected'); })[0];
+    rec('添加后：新分类被自动选中', !!sel && sel.textContent.indexOf('宵夜') >= 0, sel ? sel.textContent.trim() : '(无选中)');
+    rec('添加后：入口按钮恢复显示', !!d.querySelector('#qt-cat-new-btn'));
+
+    var rawCats = JSON.parse(localStorage.getItem('quit-tracker-v1') || '{}').categories || [];
+    rec('添加后：已写入 localStorage.categories', rawCats.indexOf('宵夜') >= 0, 'categories=' + rawCats.join(','));
+
+    /* ---------- C2. 筛选胶囊 data-filter 绑定（回归 BUG-J1） ---------- */
+    var drinkTab = Array.prototype.slice.call(d.querySelectorAll('.tab')).filter(function (b) {
+      return b.getAttribute('data-filter') === '饮食';
+    })[0];
+    rec('筛选胶囊：data-filter 属性承载分类值', !!drinkTab);
+    // 空分类不渲染胶囊（v5 设计：只显示已使用的分类），所以改用「使用中」的分类改名回归
+    rec('筛选胶囊：空分类不渲染胶囊（设计：只显示已使用的分类）',
+        !Array.prototype.slice.call(d.querySelectorAll('.tab')).some(function (b) {
+          return b.getAttribute("data-filter") === "奶茶'";
+        }));
+    qt.renameCategory('数字娱乐', "奶茶'"); // 含撇号分类名：旧实现会让 onclick 语法断裂（BUG-J1）
+    var apoTab = Array.prototype.slice.call(d.querySelectorAll('.tab')).filter(function (b) {
+      return b.getAttribute('data-filter') === "奶茶'";
+    })[0];
+    rec('筛选胶囊：撇号分类名正常产出胶囊（使用中的分类）', !!apoTab);
+    if (apoTab) apoTab.click();
+    rec('筛选胶囊：点击撇号分类不抛错且只显示该分类的项目',
+        d.querySelectorAll('.project-card').length === 1);
+    qt.renameCategory("奶茶'", '数字娱乐'); // 还原分类名，不影响后续断言
+    var allTab = Array.prototype.slice.call(d.querySelectorAll('.tab')).filter(function (b) {
+      return b.getAttribute('data-filter') === '';
+    })[0];
+    if (allTab) allTab.click(); // 恢复「全部」，不影响后续断言
+
+    /* ---------- D. 点「管理」→ 打开管理弹窗（叠加） ---------- */
+    var mb = d.querySelector('#qt-cat-manage-btn');
+    if (mb) mb.click();
+    var rows = Array.prototype.slice.call(d.querySelectorAll('.cat-row')).map(function (r) { return r.getAttribute('data-c'); });
+    rec('管理弹窗：已打开且有分类行', rows.length > 0, 'rows=' + rows.join(','));
+    rec('管理弹窗：含刚新建的「宵夜」', rows.indexOf('宵夜') >= 0);
+
+    /* ---------- E. 管理里重命名当前选中分类 → 选择器应跟随 ---------- */
+    var yx = Array.prototype.slice.call(d.querySelectorAll('.cat-row')).filter(function (r) {
+      return r.getAttribute('data-c') === '宵夜';
+    })[0];
+    rec('管理弹窗：定位到「宵夜」行', !!yx);
+    if (yx) {
+      yx.querySelector('[data-act="rename"]').click();
+      var ri = d.querySelector('#qt-cat-rename');
+      rec('重命名弹窗出现', !!ri);
+      if (ri) {
+        ri.value = '夜宵外卖';
+        d.querySelector('#qt-cat-rename-ok').click();
+      }
+    }
+    var chipsAfterRename = Array.prototype.slice.call(d.querySelectorAll('#qt-cat .tag-opt'));
+    var selR = chipsAfterRename.filter(function (c) { return c.classList.contains('selected'); })[0];
+    rec('重命名后：选择器已刷新为新名', chipsAfterRename.some(function (c) { return c.textContent.indexOf('夜宵外卖') >= 0; }),
+        'chips=' + chipsAfterRename.map(function (c) { return c.textContent.trim(); }).join(','));
+    rec('重命名后：选中项跟随改名', !!selR && selR.textContent.indexOf('夜宵外卖') >= 0, selR ? selR.textContent.trim() : '(无选中)');
+
+    /* ---------- F. 删除当前选中分类 → 选择器应回落「未分类」 ---------- */
+    var target = Array.prototype.slice.call(d.querySelectorAll('.cat-row')).filter(function (r) {
+      return r.getAttribute('data-c') === '夜宵外卖';
+    })[0];
+    rec('管理弹窗：定位到改名后的行', !!target);
+    if (target) {
+      target.querySelector('[data-act="del"]').click();
+      var delOk = d.querySelector('#qt-cat-del-ok');
+      rec('删除确认弹窗出现', !!delOk);
+      if (delOk) delOk.click();
+    }
+    var rows2 = Array.prototype.slice.call(d.querySelectorAll('.cat-row')).map(function (r) { return r.getAttribute('data-c'); });
+    rec('删除后：管理列表已不含该分类', rows2.indexOf('夜宵外卖') < 0, 'rows=' + rows2.join(','));
+
+    /* ---------- G. 关闭管理弹窗 → 底层选择器应已同步 ---------- */
+    var doneBtn = Array.prototype.slice.call(d.querySelectorAll('.modal-back button')).filter(function (b) {
+      return b.textContent.trim() === '完成';
+    })[0];
+    rec('管理弹窗有「完成」按钮', !!doneBtn);
+    if (doneBtn) doneBtn.click();
+
+    var chips2 = Array.prototype.slice.call(d.querySelectorAll('#qt-cat .tag-opt'));
+    rec('关闭管理后：选择器仍存在（编辑弹窗未被误关）', chips2.length > 0);
+    rec('关闭管理后：选择器不含已删分类', !chips2.some(function (c) { return c.textContent.indexOf('夜宵外卖') >= 0; }),
+        'chips=' + chips2.map(function (c) { return c.textContent.trim(); }).join(','));
+    var sel2 = chips2.filter(function (c) { return c.classList.contains('selected'); })[0];
+    rec('关闭管理后：选中回落「未分类」', !!sel2 && sel2.textContent.indexOf('未分类') >= 0, sel2 ? sel2.textContent.trim() : '(无选中)');
+
+    /* ---------- H. 保存编辑 → 落盘值应为空分类 ---------- */
+    var saveBtn = d.querySelector('#qt-save-btn');
+    if (saveBtn) saveBtn.click();
+    var saved = JSON.parse(localStorage.getItem('quit-tracker-v1') || '{}');
+    var d1 = (saved.projects || []).filter(function (p) { return p.id === 'demo1'; })[0];
+    rec('保存后：demo1.category 落盘为未分类', !!d1 && d1.category === '', d1 ? 'category="' + d1.category + '"' : '(未取到)');
+
+    /* ---------- I. 新建项目弹窗同样具备入口 ---------- */
+    qt.openNewProject();
+    rec('新建弹窗：有「＋ 新建」入口', !!d.querySelector('#qt-cat-new-btn'));
+    rec('新建弹窗：有「管理」入口', !!d.querySelector('#qt-cat-manage-btn'));
+    var nb2 = d.querySelector('#qt-cat-new-btn');
+    if (nb2) nb2.click();
+    rec('新建弹窗：点新建也能进入输入态', !!d.querySelector('#qt-cat-inline'));
+
+    flush();
+  } catch (e) {
+    log.push('EXCEPTION | ' + (e && e.message ? e.message : String(e)));
+    if (e && e.stack) log.push('STACK | ' + e.stack.split('\n')[1]);
+    flush();
+  }
+  };
+  f.src = '../index.html#seed'; // 相对路径：兼容 GitHub Pages 项目站点的子路径部署
+}
+</script>
+</body>
+</html>

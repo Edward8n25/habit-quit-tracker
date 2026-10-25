@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1ed760"/>
+      <stop offset="100%" stop-color="#0fa847"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <!-- 戒断圆环 + 中心时间感 -->
+  <circle cx="256" cy="256" r="148" fill="none" stroke="#ffffff" stroke-width="20" stroke-linecap="round" stroke-dasharray="760 90" transform="rotate(-90 256 256)"/>
+  <!-- 中心 0 -->
+  <text x="256" y="280" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="120" font-weight="800" fill="#ffffff">0</text>
+  <!-- 顶部小标签 -->
+  <text x="256" y="146" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="28" font-weight="700" fill="#ffffff" opacity="0.85" letter-spacing="4">QUIT</text>
+</svg>
