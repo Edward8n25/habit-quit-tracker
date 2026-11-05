@@ -16,7 +16,7 @@ t('activate 清理限定 quit-tracker- 前缀（同源共存不互删）',
   /k\.startsWith\('quit-tracker-'\) && k !== CACHE/.test(sw));
 t('CACHE 名以 quit-tracker- 开头（前缀过滤自身可达）', /const CACHE = 'quit-tracker-/.test(sw));
 t('SW 注册调用存在（离线能力前置）', /serviceWorker\.register\('sw\.js'\)/.test(app));
-t('APP_VERSION 为 1.0.1（与 CHANGELOG 对应）', /APP_VERSION = '1\.0\.1'/.test(app));
+t('APP_VERSION 与 CHANGELOG 最新版本对应（1.1.0）', /APP_VERSION = '1\.1\.0'/.test(app));
 
 let pass = 0;
 results.forEach(([name, ok, detail]) => {

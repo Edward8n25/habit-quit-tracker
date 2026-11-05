@@ -16,7 +16,7 @@
   var ACCENT_LIST = ['green', 'ocean', 'teal', 'sunset'];
   var DEMO_KEY = 'quit-tracker-demo'; // 对外展示模式（全局开关，持久化：跨刷新保持隐藏，防演示时误刷新泄露）
   var SCHEMA_VERSION = 7; // v7: records 只存破戒，项目起点独立为 startTs（不再借 records[0] 当起点）
-  var APP_VERSION = '1.0.1'; // 产品版本（口径：1.0.0 前均为开发期 0.x；与 CHANGELOG 对应，与 schema 版本相互独立）
+  var APP_VERSION = '1.1.0'; // 产品版本（口径：1.0.0 前均为开发期 0.x；与 CHANGELOG 对应，与 schema 版本相互独立）
 
   // 通用常量（集中定义，避免魔法数字散落）
   var DAY_MS = 86400000;
