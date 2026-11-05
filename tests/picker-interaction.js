@@ -211,9 +211,12 @@ function fresh() { return boot(STORE); }
 
   const del = r.qt.deleteCategory('餐饮');
   const st2 = JSON.parse(r.store['quit-tracker-v1']);
+  // v7：夹具是 v6 形态（1 条"起点"记录），迁移后该记录变成 startTs，records 归空。
+  // 断言意图不变：项目与记录都不丢 —— 起点完整保留在 startTs。
   results.push(['删除：项目回落未分类（项目与记录都不丢）',
     del.ok === true && r.qt.getCategories().indexOf('餐饮') < 0
-    && st2.projects[0].category === '' && st2.projects[0].records.length === 1]);
+    && st2.projects[0].category === '' && st2.projects[0].records.length === 0
+    && typeof st2.projects[0].startTs === 'number']);
 }
 
 // ---------- 9. 自动弹窗队列：多周期同时跨过不丢失（回归 BUG-S1，旧单槽 pendingAutoModal 会被最后一个覆盖） ----------

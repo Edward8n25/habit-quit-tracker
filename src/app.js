@@ -15,7 +15,7 @@
   var ACCENT_KEY = 'quit-tracker-accent'; // 配色方案（设置内切换）：green | ocean | teal | sunset，默认 green
   var ACCENT_LIST = ['green', 'ocean', 'teal', 'sunset'];
   var DEMO_KEY = 'quit-tracker-demo'; // 对外展示模式（全局开关，持久化：跨刷新保持隐藏，防演示时误刷新泄露）
-  var SCHEMA_VERSION = 6; // v6: 顶层加 categories（分类列表，用户可增删改）
+  var SCHEMA_VERSION = 7; // v7: records 只存破戒，项目起点独立为 startTs（不再借 records[0] 当起点）
   var APP_VERSION = '1.0.1'; // 产品版本（口径：1.0.0 前均为开发期 0.x；与 CHANGELOG 对应，与 schema 版本相互独立）
 
   // 通用常量（集中定义，避免魔法数字散落）
@@ -106,6 +106,27 @@
     return (typeof v === 'string' && /^[\w-]+$/.test(v)) ? v : uid();
   }
 
+  // ---------- v7：项目起点独立 ----------
+  // v6 及以前，records[0] 兼任"项目起点"，破戒次数靠 records.length - 1 推算。
+  // 这个隐式约定有 4 条静默失效路径：删首条、把首条时间改到后面、补录早于首条、导入顺序异常——
+  // 每条都会让"起点"换人，破戒次数/日历/洞察/徽章全部错位且无提示。
+  // v7 把起点提成独立字段 startTs，records 只存破戒。
+
+  // 取项目起点：v7 用 startTs；旧数据在迁移时补齐（见 migrateProject）
+  function projectStartTs(p) {
+    if (!p) return null;
+    if (typeof p.startTs === 'number' && isFinite(p.startTs)) return p.startTs;
+    // 防御：未经迁移的对象（如测试直接构造的裸对象）回落第一条记录或 createdAt
+    if (p.records && p.records.length) return recordTs(p.records[0]);
+    return typeof p.createdAt === 'number' ? p.createdAt : null;
+  }
+
+  // 计时基准：最后一次破戒；从未破戒则回到起点
+  function lastRelapseTs(p) {
+    if (p && p.records && p.records.length) return recordTs(p.records[p.records.length - 1]);
+    return null;
+  }
+
   function migrateProject(p, cats) {
     var valid = Array.isArray(cats) && cats.length ? cats : DEFAULT_CATEGORIES;
     if (!p || typeof p !== 'object') return null;
@@ -123,10 +144,24 @@
         return r;
       }
       return null;
-    }).filter(Boolean);
+    }).filter(Boolean).sort(function (a, b) { return a.t - b.t; });
+    // v7 迁移：把 v6 的"records[0] 即起点"拆成 startTs + 纯破戒列表。
+    // 判据是"startTs 缺失"而非 data.v：迁移函数只拿到单个项目，拿不到顶层版本号；
+    // 而 v7 数据一定带 startTs，因此"缺 startTs"精确等价于"来自 v6 或更早"。
+    // 幂等：已迁移的数据有 startTs，不会二次切分 records。
+    if (typeof p.startTs !== 'number' || !isFinite(p.startTs)) {
+      if (p.records.length) {
+        p.startTs = recordTs(p.records[0]);
+        p.records = p.records.slice(1); // 首条原本是起点，不计破戒
+      } else {
+        // v6 的"尚未开始"（records 为空）在 v7 不再存在：起点回落到 createdAt / 当前时刻
+        p.startTs = (typeof p.createdAt === 'number' && isFinite(p.createdAt)) ? p.createdAt : Date.now();
+      }
+    }
     // N-07：导入/加载路径的时间上界归一。未来时间戳会让计时为负（被夹 0 显示"0 天"）、
     // 让"刚刚"永远成立。注意下界不设：ts=0（1970-01-01T00:00）是 BUG-E1 明确保留的合法输入。
     var futureLimit = Date.now() + FUTURE_TOLERANCE_MS;
+    if (p.startTs > futureLimit) p.startTs = Date.now();
     p.records.forEach(function (r) {
       if (r.t > futureLimit) r.t = Date.now();
     });
@@ -139,6 +174,8 @@
     });
     // 归一可能改变时间顺序（未来时间被拉回当前），排序放在归一之后
     p.records.sort(function (a, b) { return a.t - b.t; });
+    // 起点必须早于所有破戒：导入数据若 startTs 落在破戒之后，归一为最早那条破戒的时间
+    if (p.records.length && p.startTs > recordTs(p.records[0])) p.startTs = recordTs(p.records[0]);
     if (!Array.isArray(p.reviews)) p.reviews = [];
     p.reviews = p.reviews.filter(function (r) { return r && typeof r === 'object'; }).map(function (r) {
       r.id = safeId(r.id); // reviews[].id 同样会拼进 data-rid 与 onclick
@@ -160,7 +197,7 @@
       p.dismissedReviewBanner = null;
     }
     if (typeof p.createdAt !== 'number') {
-      p.createdAt = p.records.length ? recordTs(p.records[0]) : Date.now();
+      p.createdAt = p.startTs;
     }
     recalcBest(p);
     return p;
@@ -270,7 +307,8 @@
       emoji: emoji || '🚭',
       category: normalizeCategory(category), // v5：项目分类（'' = 未分类）
       order: state.projects.length, // v5：自定义排序 —— 新项目追加到末尾
-      records: [{ id: uid(), t: start, n: '', tags: [] }],   // 第一条：首次创建（起始计时，不计入破戒次数）
+      startTs: start,       // v7：项目起点（独立字段，不占 records）
+      records: [],          // v7：只存破戒记录；起点在 startTs
       reviews: [],          // 复盘记录：{id, cycleDays, ts, achievement, improvement, nextPlan}
       bestStreak: 0,        // 历史最长（ms）
       goalDays: typeof goalDays === 'number' && goalDays > 0 ? Math.floor(goalDays) : 0, // 目标坚持天数（0 = 未设置）
@@ -418,11 +456,12 @@
   }
 
   // 计算从 latest record 到现在已经过去多久
-  // 无记录时返回 null（表示"还没开始"）
+  // 当前坚持时长 = 距最后一次破戒（从未破戒则距项目起点）
+  // v7：起点独立，records 为空时不再是"还没开始"，而是"从起点一直坚持到现在"
   function currentStreak(project) {
-    if (!project || !project.records || !project.records.length) return null;
-    var last = project.records[project.records.length - 1];
-    var ts = typeof last === 'number' ? last : last.t;
+    if (!project) return null;
+    var ts = lastRelapseTs(project);
+    if (ts == null) ts = projectStartTs(project);
     if (typeof ts !== 'number' || isNaN(ts)) return null;
     return Date.now() - ts;
   }
@@ -447,13 +486,26 @@
   }
 
   // 添加新记录（破戒）
+  // A10：复吸后清空里程碑/复盘的"已提示"标记 —— 否则一个项目一生只庆祝一次 1/3/7… 天，
+  // 第二次坚持到 7 天不再弹任何提示，而"第二次坚持"恰恰是戒断工具最高频的场景。
   function addRecord(projectId, ts, note, tags) {
     var p = getProject(projectId);
     if (!p) return;
     p.records.push({ id: uid(), t: ts, n: (note || '').trim(), tags: Array.isArray(tags) ? tags.filter(Boolean) : [] });
     p.records.sort(function (a, b) { return a.t - b.t; });
+    resetCycleMarkers(p);
     recalcBest(p);
     saveState();
+  }
+
+  // 清空周期提示标记（复吸即视为新一轮开始）
+  // lastCheckedDays 必须一并清：ticker 只在"天数变化"时检查，不清缓存则新一段的
+  // 第 1 天不会触发任何检查（app.js 的 updateListTicker/updateDetailTicker 依赖它）。
+  function resetCycleMarkers(p) {
+    p.seenMilestones = [];
+    p.seenReviewCycles = [];
+    p.dismissedReviewBanner = null;
+    if (p && p.id && lastCheckedDays) delete lastCheckedDays[p.id];
   }
 
   function deleteRecord(projectId, recordId) {
@@ -465,17 +517,19 @@
   }
 
   // 编辑记录（时间 + 备注 + 原因标签）
+  // 返回布尔：false = 记录已不存在（弹窗可能因多标签或删除残留而失效，调用方不得再报"已保存"）
   function updateRecord(projectId, recordId, ts, note, tags) {
     var p = getProject(projectId);
-    if (!p) return;
+    if (!p) return false;
     var r = p.records.find(function (x) { return x.id === recordId; });
-    if (!r) return;
+    if (!r) return false;
     r.t = ts;
     r.n = (note || '').trim();
     r.tags = Array.isArray(tags) ? tags.filter(Boolean) : [];
     p.records.sort(function (a, b) { return recordTs(a) - recordTs(b); });
     recalcBest(p);
     saveState();
+    return true;
   }
 
   // ============== 复盘 ==============
@@ -500,23 +554,40 @@
     return r;
   }
 
+  // A11：复盘"已提示"统一到 seenReviewCycles 单一真源。
+  // 原实现弹窗读 seenReviewCycles、横幅读 reviews，两套真源必然分叉：
+  // 改周期会重复弹已做过的周期；删复盘后横幅 3 天后永久复发且无法根治。
   function updateReview(projectId, reviewId, cycleDays, achievement, improvement, nextPlan) {
     var p = getProject(projectId);
-    if (!p) return;
+    if (!p) return false;
     var r = p.reviews.find(function (x) { return x.id === reviewId; });
-    if (!r) return;
+    if (!r) return false;
+    var oldCycle = r.cycleDays;
     r.cycleDays = cycleDays;
     r.achievement = (achievement || '').trim();
     r.improvement = (improvement || '').trim();
     r.nextPlan = (nextPlan || '').trim();
     p.reviews.sort(function (a, b) { return a.ts - b.ts; });
+    // 周期变更：新周期记为"已提示"，旧周期若已无复盘则放开提示
+    if (oldCycle !== cycleDays) {
+      if (p.seenReviewCycles.indexOf(cycleDays) === -1) p.seenReviewCycles.push(cycleDays);
+      if (!p.reviews.some(function (x) { return x.cycleDays === oldCycle; })) {
+        p.seenReviewCycles = p.seenReviewCycles.filter(function (c) { return c !== oldCycle; });
+      }
+    }
     saveState();
+    return true;
   }
 
   function deleteReview(projectId, reviewId) {
     var p = getProject(projectId);
     if (!p) return;
-    p.reviews = p.reviews.filter(function (r) { return r.id !== reviewId; });
+    var r = p.reviews.find(function (x) { return x.id === reviewId; });
+    p.reviews = p.reviews.filter(function (x) { return x.id !== reviewId; });
+    // 该周期已无任何复盘 → 放开提示标记，否则横幅会永久复发
+    if (r && !p.reviews.some(function (x) { return x.cycleDays === r.cycleDays; })) {
+      p.seenReviewCycles = p.seenReviewCycles.filter(function (c) { return c !== r.cycleDays; });
+    }
     saveState();
   }
 
@@ -532,11 +603,14 @@
   // 重新计算历史最高
   // 语义：只统计"已完成间隔"的最大值（稳定）；当前正在进行的连胜由 currentStreak 独立承担，
   // 不计入历史最高，否则补录/删除记录会导致 bestStreak 波动下降（违反"历史最高"直觉）
+  // v7：间隔序列 = [起点, ...破戒]，首段从 startTs 起算
   function recalcBest(project) {
     var best = 0;
-    for (var i = 1; i < project.records.length; i++) {
-      var s = streakBetween(recordTs(project.records[i - 1]), recordTs(project.records[i]));
+    var prev = projectStartTs(project);
+    for (var i = 0; i < project.records.length; i++) {
+      var s = streakBetween(prev, recordTs(project.records[i]));
       if (s > best) best = s;
+      prev = recordTs(project.records[i]);
     }
     project.bestStreak = best;
   }
@@ -1191,8 +1265,8 @@
     list.forEach(function (p) {
       var streak = currentStreak(p);
       var dur = streak != null ? formatDuration(streak) : null;
-      // 破戒次数：首条为"首次创建"记录（起始计时），不计入破戒
-      var totalRecords = Math.max(0, p.records.length - 1);
+      // 破戒次数：v7 起 records 只含破戒（起点在 startTs）
+      var totalRecords = p.records.length;
       var isPriv = !!p.private;
       var blurred = isPriv && shouldBlur(p);
       var eyeCls = blurred ? '' : ' on'; // 眼睛睁开(清晰)时给高亮提示
@@ -1215,7 +1289,7 @@
            + '      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>'
            + '    </button>'
            + '  </div>'
-           + '  <div class="pc-time' + (blurred ? ' is-blurred' : '') + '" data-streak-ts="' + (streak != null ? p.records[p.records.length - 1].t : '') + '">'
+           + '  <div class="pc-time' + (blurred ? ' is-blurred' : '') + '" data-streak-ts="' + (function () { var ts = lastRelapseTs(p); return ts == null ? projectStartTs(p) : ts; })() + '">'
            + (streak != null
                 ? '<span class="streak-text">' + dur.str + '</span>'
                 : '<span style="color: var(--text-mute); font-size: 24px; font-weight: 600;">尚未开始</span>')
@@ -1313,8 +1387,8 @@
     var streak = currentStreak(p);
     var dur = streak != null ? formatDuration(streak) : null;
     var best = p.bestStreak ? formatDuration(p.bestStreak) : null;
-    var lastTs = p.records.length ? recordTs(p.records[p.records.length - 1]) : null;
-    var firstTs = p.records.length ? recordTs(p.records[0]) : null;
+    var lastTs = lastRelapseTs(p);
+    var startTs = projectStartTs(p);
     var isPriv = !!p.private;
     var blurred = isPriv && shouldBlur(p);
     var eyeCls = blurred ? '' : ' on';
@@ -1383,18 +1457,20 @@
       html += '<div class="section-title">数据</div>';
       html += '<div class="stat-grid' + (blurred ? ' is-blurred' : '') + '">'
            + statCard('历史最长', best ? best.short : '—', best ? best.str : '暂无')
-           + statCard('破戒次数', String(Math.max(0, p.records.length - 1)), (p.records.length > 1 ? ('最近 ' + formatRelative(p.records[p.records.length - 1].t)) : (p.records.length ? '暂无破戒' : '暂无记录')))
-           + statCard('首次记录', firstTs ? formatDateTime(firstTs).slice(5) : '—', firstTs ? formatRelative(firstTs) : '—')
+           + statCard('破戒次数', String(p.records.length), (lastTs != null ? ('最近 ' + formatRelative(lastTs)) : '暂无破戒'))
+           + statCard('开始时间', startTs ? formatDateTime(startTs).slice(5) : '—', startTs ? formatRelative(startTs) : '—')
            + statCard('当前连胜', streak != null ? dur.compact : '—', streak != null ? dur.short : '尚未开始')
            + '</div>';
       // 目标进度（C1：设置了 goalDays 时显示进度条）
       if (p.goalDays > 0) {
         var daysNow = streak != null ? Math.floor(streak / DAY_MS) : 0;
-        var pct = Math.min(100, Math.round(daysNow / p.goalDays * 100));
         var goalDone = daysNow >= p.goalDays;
+        // A18：未达成时不得显示 100%（round(99.9)=100 会让满格与"未达成"同屏矛盾）
+        var pct = goalDone ? 100 : Math.min(99, Math.floor(daysNow / p.goalDays * 100));
+        var pctText = (pct === 0 && daysNow > 0) ? '<1%' : pct + '%';
         html += '<div class="goal-card' + (blurred ? ' is-blurred' : '') + '">'
              + '  <div class="goal-head"><span>目标坚持 <b>' + p.goalDays + '</b> 天</span>'
-             + '  <span class="' + (goalDone ? 'goal-done' : 'goal-now') + '">' + (goalDone ? '🎉 已达成' : '已坚持 ' + daysNow + ' 天 · ' + pct + '%') + '</span></div>'
+             + '  <span class="' + (goalDone ? 'goal-done' : 'goal-now') + '">' + (goalDone ? '🎉 已达成' : '已坚持 ' + daysNow + ' 天 · ' + pctText) + '</span></div>'
              + '  <div class="goal-track"><div class="goal-fill' + (goalDone ? ' done' : '') + '" style="width:' + pct + '%"></div></div>'
              + '</div>';
       }
@@ -1467,9 +1543,9 @@
   // 历史记录区（独立渲染：搜索时只重建本容器，日历/统计/复盘不受影响）
   function renderHistoryList(p) {
     var blurred = p.private && shouldBlur(p); // 隐私项目：历史列表区模糊（搜索框保留可输入，但结果不可读）
-    var html = '<div class="section-title">历史记录（' + p.records.length + '）</div>';
+    var html = '<div class="section-title">破戒记录（' + p.records.length + '）</div>';
     if (p.records.length === 0) {
-      html += '<div style="text-align: center; color: var(--text-mute); padding: 24px; font-size: 13px;">还没有任何记录</div>';
+      html += '<div style="text-align: center; color: var(--text-mute); padding: 24px; font-size: 13px;">还没有破戒记录，继续保持</div>';
       return html;
     }
     // 搜索框（模糊态不模糊搜索框本身，但输入结果仍在模糊区内不可读）
@@ -1526,19 +1602,19 @@
   }
 
   // ============== B1：破戒模式分析（洞察） ==============
-  // 纯前端计算，无数据模型改动。统计破戒记录（不含首条"开始"记录）的：
+  // 纯前端计算，无数据模型改动。统计全部破戒记录（v7 起 records 只含破戒）的：
   // 星期分布 / 时段分布 / 平均间隔 与 趋势
   function buildInsights(p) {
-    var recs = p.records.slice(1); // 首条为"开始"记录，不计入破戒
+    var recs = p.records; // v7：records 全部是破戒，起点在 startTs
     var insight = { hasData: recs.length > 0, dow: [0, 0, 0, 0, 0, 0, 0], period: { 凌晨: 0, 上午: 0, 下午: 0, 晚上: 0 }, avgGapDays: null, trend: null, topTags: [] };
     if (recs.length === 0) return insight;
 
-    var DOW_NAMES = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
     var totalGap = 0;
     var gapCount = 0;
     var rising = 0, falling = 0;
     var prevGap = null;
     var tagCount = {};
+    var startTs = projectStartTs(p);
 
     recs.forEach(function (r, i) {
       var ts = recordTs(r);
@@ -1551,8 +1627,8 @@
       else if (h < 18) insight.period['下午']++;
       else insight.period['晚上']++;
       recordTags(r).forEach(function (t) { tagCount[t] = (tagCount[t] || 0) + 1; });
-      // 间隔：与上一条破戒（或开始记录）的时间差
-      var prevTs = recordTs(p.records[i]); // recs[i] 对应 p.records[i+1]，上一条是 p.records[i]
+      // 间隔：与上一条破戒的时间差；第一条破戒则与项目起点的时间差
+      var prevTs = i === 0 ? startTs : recordTs(recs[i - 1]);
       if (typeof prevTs === 'number') {
         var gap = (ts - prevTs) / DAY_MS;
         totalGap += gap; gapCount++;
@@ -1631,8 +1707,10 @@
     for (var i = REVIEW_CYCLES.length - 1; i >= 0; i--) {
       var c = REVIEW_CYCLES[i];
       if (days >= c) {
-        // 已经被"已做复盘"标记 或 被"忽略 3 天"标记 的不算 pending
-        var reviewed = (p.reviews || []).some(function (r) { return r.cycleDays === c; });
+        // A11：统一读 seenReviewCycles 单一真源（新增/编辑/删除复盘都会同步它）。
+        // 原实现读 p.reviews，与弹窗去重用的 seenReviewCycles 是两套真源，
+        // 导致「改周期重复弹已做过的周期」与「删复盘后横幅永久复发」。
+        var reviewed = p.seenReviewCycles.indexOf(c) !== -1;
         var dismissedRecent = p.dismissedReviewBanner && p.dismissedReviewBanner.cycle === c && p.dismissedReviewBanner.until > Date.now();
         if (!reviewed && !dismissedRecent) {
           pendingCycle = c;
@@ -1690,17 +1768,19 @@
       var s = currentStreak(p);
       return s != null ? Math.floor(s / DAY_MS) : 0;
     })();
-    var relapseCount = Math.max(0, p.records.length - 1); // 破戒次数（不含首条开始记录）
+    var relapseCount = p.records.length; // v7：records 只含破戒，起点在 startTs
     var reviewCount = (p.reviews || []).length;
     // 历史最长（已完成间隔）
     var bestDays = p.bestStreak ? Math.floor(p.bestStreak / DAY_MS) : 0;
     // 是否有过破戒（至少 1 次破戒记录）
     var hasRelapse = relapseCount > 0;
-    // 判据：任意相邻记录间隔 < 24h（含「开始 → 首次破戒」）——数据模型没有"重新出发"事件，
+    // 判据：任意相邻记录间隔 < 24h（首条破戒与项目起点比）——数据模型没有"重新出发"事件，
     // 徽章语义按批次 5 决策 3 定为"快速破戒仍如实记录"（原文案"重新出发"与判据相反，已修正）
     var fastRebound = false;
-    for (var i = 1; i < p.records.length; i++) {
-      var gap = recordTs(p.records[i]) - recordTs(p.records[i - 1]);
+    var startTs = projectStartTs(p);
+    for (var i = 0; i < p.records.length; i++) {
+      var prevTs = i === 0 ? startTs : recordTs(p.records[i - 1]);
+      var gap = recordTs(p.records[i]) - prevTs;
       if (typeof gap === 'number' && gap < DAY_MS && gap > 0) { fastRebound = true; break; }
     }
 
@@ -1744,8 +1824,8 @@
   // 把 records 按 yyyy-mm-dd 索引，返回 {key: count}
   function buildRecordCountMap(p) {
     var map = {};
-    // 首条为"开始记录"，不算破戒 —— 与列表/详情/洞察/徽章口径一致（统一用 slice(1)）
-    p.records.slice(1).forEach(function (r) {
+    // v7：records 全部是破戒（起点在 startTs，不占 records，因此日历不会出现起点噪声）
+    p.records.forEach(function (r) {
       var ts = recordTs(r);
       if (typeof ts !== 'number') return;
       var d = new Date(ts);
@@ -2039,8 +2119,10 @@
     if (!p) return;
     if (guardPrivate(p)) return; // 演示模式锁定隐私项目
     closeModal(); // 排他性弹窗
+    var startTs = projectStartTs(p);
     var html = ''
       + '<div class="field"><label>项目名称</label><input class="input" id="qt-name" value="' + esc(p.name) + '" maxlength="20"></div>'
+      + '<div class="field"><label>开始时间</label><input class="input" type="datetime-local" id="qt-start" value="' + (startTs != null ? inputDateTimeValue(startTs) : '') + '"></div>'
       + '<div class="field"><label>目标坚持天数（可选，0 = 不限）</label><input class="input" type="number" id="qt-goal" min="0" max="3650" value="' + (p.goalDays || 0) + '"></div>'
       + '<div class="field"><label>分类</label><div class="tag-picker" id="qt-cat"></div></div>'
       + '<div class="field"><label>隐私项目</label><label class="privacy-toggle"><input type="checkbox" id="qt-private"' + (p.private ? ' checked' : '') + '> <span>设为隐私项目（对外展示时内容模糊，需点 👁 查看）</span></label></div>'
@@ -2062,11 +2144,20 @@
         if (!name) { unlock(); toast('请填写项目名称'); return; }
         var goalVal = parseInt(back.querySelector('#qt-goal').value, 10);
         if (!isNaN(goalVal) && goalVal > 3650) { unlock(); toast('目标天数最多 3650 天'); return; }
+        var parsedStart = parseRecordTime(back.querySelector('#qt-start').value);
+        if (!parsedStart.ok) { unlock(); toast('开始时间无效'); return; }
         // N-04：多标签页下弹窗打开期间，storage 事件可能已把 state 整库替换，
         // 闭包捕获的 p 已不在 state.projects 里。此刻写 p 会被 saveState 丢弃（静默丢改动）。
         // 必须按 id 重新取当前对象；取不到说明项目已被其他标签页删除。
         var live = getProject(id);
         if (!live) { closeModal(); render(); toast('该项目已被其他标签页删除，改动未保存'); return; }
+        // v7：起点不得晚于任何一条破戒（否则时间线倒挂，统计全部异常）
+        if (live.records.length && parsedStart.ts > recordTs(live.records[0])) {
+          unlock();
+          toast('开始时间不能晚于第一条破戒记录（' + formatDateTime(recordTs(live.records[0])) + '）');
+          return;
+        }
+        live.startTs = parsedStart.ts;
         live.name = name;
         live.emoji = emojiPicker.getValue();
         live.goalDays = (!isNaN(goalVal) && goalVal > 0) ? goalVal : 0;
@@ -2074,6 +2165,7 @@
         live.private = back.querySelector('#qt-private').checked;
         live.category = catPicker.getValue();
         if (!live.private) live.eyeOpen = false;
+        recalcBest(live); // 起点变化会影响首段时长，历史最长必须重算
         saveState();
         closeModal();
         render();
@@ -2087,6 +2179,9 @@
     var p = getProject(id);
     if (!p) return;
     if (guardPrivate(p)) return; // 演示模式锁定隐私项目
+    // N-12：隐私项目在模糊状态下不得打开本弹窗 —— 弹窗正文会明文显示项目名与当前坚持时长，
+    // 直接绕过列表/详情的模糊。要求先睁眼（或退出演示模式）。
+    if (p.private && shouldBlur(p)) { toast('请先点击 👁 睁眼查看，再记录破戒'); return; }
     closeModal(); // 排他性弹窗
     var now = Date.now();
     var html = ''
@@ -2112,9 +2207,14 @@
         var unlock = lockSaveBtn(back.querySelector('#qt-save-btn'));
         var parsed = parseRecordTime(timeInput.value);
         if (!parsed.ok) { unlock(); toast(parsed.msg); return; }
-        // 补录早于首条记录：会重置"已坚持"计时，明确提示影响
-        if (p.records.length && parsed.ts < recordTs(p.records[0])) {
-          toast('该时间早于当前开始时间，计时将重新开始');
+        // N-03 + v7：早于起点的时间必须拒绝，不能只发一条警告 —— 原实现紧接着发成功 toast，
+        // 而 toast() 会先删掉所有旧 toast，那条警告用户永远看不到。
+        // v7 起点是独立字段，补录不能改写它（要改起点请走编辑项目）。
+        var startTs = projectStartTs(p);
+        if (typeof startTs === 'number' && parsed.ts < startTs) {
+          unlock();
+          toast('该时间早于项目开始时间（' + formatDateTime(startTs) + '），请调整时间或先修改开始时间');
+          return;
         }
         var note = back.querySelector('#qt-note').value;
         addRecord(p.id, parsed.ts, note, tagPicker.getValue());
@@ -2330,21 +2430,29 @@
   // ⚠️ 这里刻意不返回"周期内坚持总时长"：各坚持段在窗口内首尾相接、无缝铺满，
   //    其总和恒等于窗口长度（近 7 天永远是"7 天"），没有信息量。原周报的"周期内坚持"就是这个问题。
   function periodStats(p, fromTs, toTs) {
-    var recs = p.records, relapses = 0, maxSeg = 0, i, t, prev, seg;
-    for (i = 1; i < recs.length; i++) { // 首条为"开始记录"，不计破戒
-      t = recordTs(recs[i]);
-      if (typeof t !== 'number' || t < fromTs || t > toTs) continue;
-      relapses++;
-      prev = recordTs(recs[i - 1]);
-      seg = t - Math.max(typeof prev === 'number' ? prev : fromTs, fromTs);
-      if (seg > maxSeg) maxSeg = seg;
-    }
-    // 进行中的那段：与窗口取交集
-    var lastTs = recs.length ? recordTs(recs[recs.length - 1]) : null;
-    if (typeof lastTs === 'number') {
-      var a = Math.max(lastTs, fromTs);
-      var b = Math.min(Date.now(), toTs);
+    var recs = p.records;
+    var relapses = 0;
+    var maxSeg = 0;
+    // v7 + A8/A9：改为「枚举事件点 → 逐段与窗口求交」。
+    // 原实现无论算哪个窗口都用全库最后一条记录当"进行中那段"的起点，历史窗口里该起点
+    // 落在窗口之外 → maxSeg 恒为 0（周报"上期"永远显示"—"）。
+    // 现改为：每个坚持段 = [上一事件, 本次事件)，逐段与窗口取交集取最大值，
+    // 窗口边界统一半开 [from, to)，避免破戒恰好落在边界时被本期与上期各计一次。
+    var prevTs = projectStartTs(p);
+    for (var i = 0; i < recs.length; i++) {
+      var t = recordTs(recs[i]);
+      if (typeof t !== 'number') continue;
+      var a = Math.max(prevTs, fromTs);
+      var b = Math.min(t, toTs);
       if (b > a && (b - a) > maxSeg) maxSeg = b - a;
+      if (t >= fromTs && t < toTs) relapses++;
+      prevTs = t;
+    }
+    // 末段（最后一次破戒至今，或从未破戒则从起点至今）：与窗口取交集
+    if (typeof prevTs === 'number') {
+      var a2 = Math.max(prevTs, fromTs);
+      var b2 = Math.min(Date.now(), toTs);
+      if (b2 > a2 && (b2 - a2) > maxSeg) maxSeg = b2 - a2;
     }
     return { relapses: relapses, maxSeg: maxSeg };
   }
@@ -3053,7 +3161,21 @@
       // A-1 测试钩子：迁移管道 / 损坏逃生口 / 当前 state 引用（供 tests 直接构造场景）
       migrateProject: migrateProject,
       stashCorruptRaw: stashCorruptRaw,
-      _getState: function () { return state; }
+      _getState: function () { return state; },
+      // A-2 测试钩子：记录 CRUD 与起点/计时的纯计算入口（v7 口径断言需要）
+      addRecord: addRecord,
+      deleteRecord: deleteRecord,
+      updateRecord: updateRecord,
+      updateReview: updateReview,
+      deleteReview: deleteReview,
+      addReview: addReview,
+      currentStreak: currentStreak,
+      projectStartTs: projectStartTs,
+      recalcBest: recalcBest,
+      computeBadges: computeBadges,
+      buildInsights: buildInsights,
+      buildRecordCountMap: buildRecordCountMap,
+      buildReviewBanner: buildReviewBanner
     };
   }
 
@@ -3075,8 +3197,8 @@
         category: '饮食',
         order: 0,
         goalDays: 30,
+        startTs: now - 7 * day,   // v7：起点独立（原 records[0] 的"开始戒断"）
         records: [
-          { id: 'r1', t: now - 7 * day, n: '开始戒断', tags: [] },
           { id: 'r2', t: now - 5 * day, n: '下午犯困喝了一杯', tags: ['工作压力'] },
           { id: 'r3', t: now - 1 * day, n: '同事请的，不好拒绝', tags: ['社交场合'] },
           { id: 'r4', t: now - 6 * HOUR_MS, n: '晚饭后嘴馋', tags: ['习惯性动作'] }
@@ -3102,8 +3224,8 @@
         goalDays: 21,
         private: true,   // 隐私项目示例：默认模糊（演示隐私保护功能）
         eyeOpen: false,
+        startTs: now - 30 * day,  // v7：起点独立（原 records[0] 的"开始"）
         records: [
-          { id: 'r5', t: now - 30 * day, n: '开始', tags: [] },
           { id: 'r6', t: now - 22 * day, n: '朋友聚餐', tags: ['社交场合'] },
           { id: 'r7', t: now - 15 * day, n: '刷手机', tags: ['习惯性动作'] },
           { id: 'r8', t: now - 9 * day, n: '赶方案', tags: ['工作压力'] },
@@ -3133,9 +3255,8 @@
         category: '数字娱乐',
         order: 2,
         goalDays: 0,
-        records: [
-          { id: 'r11', t: now - 10 * day, n: '开始', tags: [] }
-        ],
+        startTs: now - 10 * day,  // v7：起点独立（原 records[0] 的"开始"）
+        records: [],
         reviews: [],
         bestStreak: 10 * day,
         seenMilestones: [1, 3, 7],

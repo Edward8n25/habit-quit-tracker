@@ -96,8 +96,8 @@ results.push(['recalcBest 新语义：demo2 历史最高=8天', demo2 && Math.ab
 const demo1 = data.projects.find(p => p.id === 'demo1');
 const demo2p = data.projects.find(p => p.id === 'demo2');
 results.push(['v3 goalDays 生效', demo1 && demo1.goalDays === 30 && demo3.goalDays === 0]);
-results.push(['v3 records.tags 生效', demo1 && Array.isArray(demo1.records[1].tags) && demo1.records[1].tags.indexOf('工作压力') >= 0]);
-results.push(['schema 版本为 v6', data.v === 6]);
+results.push(['v3 records.tags 生效', demo1 && Array.isArray(demo1.records[0].tags) && demo1.records[0].tags.indexOf('工作压力') >= 0]);
+results.push(['schema 版本为 v7', data.v === 7]);
 results.push(['v6 默认分类写入 state', Array.isArray(data.categories) && data.categories.length === 6 && data.categories[0] === '饮食']);
 results.push(['v5 分类与排序字段生效', demo1 && demo1.category === '饮食' && typeof demo1.order === 'number'
                                      && demo2p && demo2p.category === '作息']);
@@ -670,7 +670,7 @@ const seedV5 = { [MAIN_K]: projV5, [BAK_K]: projV5 };
   }] });
   const r = bootWith({ [MAIN_K]: st, [BAK_K]: st });
   const p = r.qt._getState().projects[0];
-  results.push(['A-1 N-07：ts=0 不被归一（保留 BUG-E1 语义）', p.records[0].t === 0]);
+  results.push(['A-1 N-07：ts=0 不被归一（保留 BUG-E1 语义）', p.startTs === 0]);
 }
 // 12.6 N-07：重复 record.id 去重（否则删一条连带删多条）
 {
@@ -686,8 +686,9 @@ const seedV5 = { [MAIN_K]: projV5, [BAK_K]: projV5 };
   const r = bootWith({ [MAIN_K]: st, [BAK_K]: st });
   const p = r.qt._getState().projects[0];
   const ids = p.records.map(x => x.id);
+  // v7 迁移后首条变为 startTs，records 剩 2 条；去重后应 2 条且 id 唯一
   results.push(['A-1 N-07：重复 record.id 被去重且不丢记录',
-    ids.length === 3 && ids.filter((v, i) => ids.indexOf(v) === i).length === 3]);
+    ids.length === 2 && ids.filter((v, i) => ids.indexOf(v) === i).length === 2]);
 }
 // 12.7 N-07：迁移管道幂等（重复跑不改变结果）
 {
@@ -702,6 +703,173 @@ const seedV5 = { [MAIN_K]: projV5, [BAK_K]: projV5 };
   const once = JSON.stringify(r.qt.migrateProject(JSON.parse(JSON.stringify(p)), cats));
   const twice = JSON.stringify(r.qt.migrateProject(JSON.parse(JSON.stringify(p)), cats));
   results.push(['A-1 N-07：migrateProject 幂等（同输入同输出）', once === twice]);
+}
+
+// ============ A-2 批次（schema v7）新增断言 ============
+// 13.1 v6 → v7：records[0] 拆成 startTs，破戒次数不减
+{
+  const now = Date.now();
+  const v6 = { id: 'm1', name: '迁移', emoji: '🧋', category: '', order: 0,
+    records: [{ id: 'm0', t: now - 10 * 86400000, n: '开始', tags: [] },
+              { id: 'm1', t: now - 6 * 86400000, n: '', tags: [] },
+              { id: 'm2', t: now - 2 * 86400000, n: '', tags: [] }],
+    reviews: [], bestStreak: 0, goalDays: 0, private: false, eyeOpen: false,
+    seenMilestones: [], seenReviewCycles: [], dismissedReviewBanner: null, createdAt: now - 10 * 86400000 };
+  const r = bootWith({});
+  const p = r.qt.migrateProject(JSON.parse(JSON.stringify(v6)), ['饮食']);
+  results.push(['A-2 v7 迁移：起点拆出 startTs，records 只留破戒',
+    p.startTs === now - 10 * 86400000 && p.records.length === 2
+    && p.records[0].id === 'm1' && p.records[1].id === 'm2']);
+}
+// 13.2 v6 只有起点一条 → records 归空，起点保留
+{
+  const now = Date.now();
+  const v6 = { id: 'm2', name: '仅起点', emoji: '🧋', category: '', order: 0,
+    records: [{ id: 'x0', t: now - 3 * 86400000, n: '开始', tags: [] }],
+    reviews: [], bestStreak: 0, goalDays: 0, private: false, eyeOpen: false,
+    seenMilestones: [], seenReviewCycles: [], dismissedReviewBanner: null, createdAt: now - 3 * 86400000 };
+  const r = bootWith({});
+  const p = r.qt.migrateProject(JSON.parse(JSON.stringify(v6)), ['饮食']);
+  results.push(['A-2 v7 迁移：仅起点 → records 空且 startTs 保留',
+    p.startTs === now - 3 * 86400000 && p.records.length === 0]);
+}
+// 13.3 v6 records 为空 → 起点回落 createdAt
+{
+  const now = Date.now();
+  const v6 = { id: 'm3', name: '空记录', emoji: '🧋', category: '', order: 0,
+    records: [], reviews: [], bestStreak: 0, goalDays: 0, private: false, eyeOpen: false,
+    seenMilestones: [], seenReviewCycles: [], dismissedReviewBanner: null, createdAt: now - 5 * 86400000 };
+  const r = bootWith({});
+  const p = r.qt.migrateProject(JSON.parse(JSON.stringify(v6)), ['饮食']);
+  results.push(['A-2 v7 迁移：records 空 → 起点回落 createdAt',
+    p.startTs === now - 5 * 86400000 && p.records.length === 0]);
+}
+// 13.4 旧纯数字 records（v2 前）也能迁移
+{
+  const now = Date.now();
+  const v1 = { id: 'm4', name: '纯数字', emoji: '🧋', category: '', order: 0,
+    records: [now - 8 * 86400000, now - 3 * 86400000],
+    reviews: [], createdAt: now - 8 * 86400000 };
+  const r = bootWith({});
+  const p = r.qt.migrateProject(JSON.parse(JSON.stringify(v1)), ['饮食']);
+  results.push(['A-2 v7 迁移：纯数字 records → 起点 + 1 条破戒',
+    p.startTs === now - 8 * 86400000 && p.records.length === 1
+    && p.records[0].t === now - 3 * 86400000]);
+}
+// 13.5 v7 数据再迁移 → 幂等（不二次切分）
+{
+  const now = Date.now();
+  const v7 = { id: 'm5', name: '已是 v7', emoji: '🧋', category: '', order: 0,
+    startTs: now - 10 * 86400000,
+    records: [{ id: 'y1', t: now - 4 * 86400000, n: '', tags: [] }],
+    reviews: [], bestStreak: 0, goalDays: 0, private: false, eyeOpen: false,
+    seenMilestones: [], seenReviewCycles: [], dismissedReviewBanner: null, createdAt: now - 10 * 86400000 };
+  const r = bootWith({});
+  const p = r.qt.migrateProject(JSON.parse(JSON.stringify(v7)), ['饮食']);
+  results.push(['A-2 v7 迁移：已是 v7 数据幂等（不二次切分）',
+    p.startTs === now - 10 * 86400000 && p.records.length === 1 && p.records[0].id === 'y1']);
+}
+// 13.6 startTs 晚于破戒 → 归一为最早破戒时间
+{
+  const now = Date.now();
+  const bad = { id: 'm6', name: '倒挂', emoji: '🧋', category: '', order: 0,
+    startTs: now - 1 * 86400000,
+    records: [{ id: 'q1', t: now - 5 * 86400000, n: '', tags: [] }],
+    reviews: [], bestStreak: 0, goalDays: 0, private: false, eyeOpen: false,
+    seenMilestones: [], seenReviewCycles: [], dismissedReviewBanner: null, createdAt: now - 5 * 86400000 };
+  const r = bootWith({});
+  const p = r.qt.migrateProject(JSON.parse(JSON.stringify(bad)), ['饮食']);
+  results.push(['A-2 v7 迁移：startTs 晚于破戒 → 归一为最早破戒',
+    p.startTs === now - 5 * 86400000]);
+}
+// 13.7 删掉唯一一条破戒后，起点不变、计时继续走（不再回到"尚未开始"）
+{
+  const now = Date.now();
+  const st = JSON.stringify({ v: 7, categories: ['饮食'], projects: [{
+    id: 'd1', name: '删破戒', emoji: '🧋', category: '', order: 0,
+    startTs: now - 10 * 86400000,
+    records: [{ id: 'd1r', t: now - 3 * 86400000, n: '', tags: [] }],
+    reviews: [], bestStreak: 0, goalDays: 0, private: false, eyeOpen: false,
+    seenMilestones: [], seenReviewCycles: [], dismissedReviewBanner: null, createdAt: now - 10 * 86400000
+  }] });
+  const r = bootWith({ [MAIN_K]: st, [BAK_K]: st });
+  r.qt.deleteRecord('d1', 'd1r');
+  const p = r.qt._getState().projects[0];
+  const streak = r.qt.currentStreak(p);
+  results.push(['A-2 v7：删掉唯一破戒后起点不变、计时继续',
+    p.records.length === 0 && p.startTs === now - 10 * 86400000
+    && streak != null && Math.abs(streak - 10 * 86400000) < 60000]);
+}
+// 13.8 A8：上期窗口内无破戒、窗口外两侧都有 → 上期 maxSeg 应为整窗
+{
+  const now = Date.now();
+  const D2 = 86400000;
+  const p = { startTs: now - 30 * D2,
+    records: [{ id: 'p1', t: now - 20 * D2 }, { id: 'p2', t: now - 3 * D2 }] };
+  const r = bootWith({});
+  const prev = r.qt.periodStats(p, now - 14 * D2, now - 7 * D2);
+  results.push(['A-2 A8：上期窗口无破戒 → maxSeg 为整窗（不再恒 0）',
+    prev.relapses === 0 && Math.abs(prev.maxSeg - 7 * D2) < 60000]);
+}
+// 13.9 A9：破戒恰好落在窗口边界 → 只计一次（半开区间）
+{
+  const now = Date.now();
+  const D2 = 86400000;
+  const p = { startTs: now - 40 * D2,
+    records: [{ id: 'b1', t: now - 7 * D2 }] };
+  const r = bootWith({});
+  const cur = r.qt.periodStats(p, now - 7 * D2, now);
+  const prev = r.qt.periodStats(p, now - 14 * D2, now - 7 * D2);
+  results.push(['A-2 A9：破戒落在边界只计一次（半开区间）',
+    cur.relapses + prev.relapses === 1 && cur.relapses === 1]);
+}
+// 13.10 A10：复吸后清空 seen 标记（第二次坚持仍会弹提示）
+{
+  const now = Date.now();
+  const st = JSON.stringify({ v: 7, categories: ['饮食'], projects: [{
+    id: 'r1', name: '复吸', emoji: '🧋', category: '', order: 0,
+    startTs: now - 20 * 86400000,
+    records: [{ id: 'r1a', t: now - 8 * 86400000, n: '', tags: [] }],
+    reviews: [], bestStreak: 0, goalDays: 0, private: false, eyeOpen: false,
+    seenMilestones: [1, 3, 7], seenReviewCycles: [3, 7], dismissedReviewBanner: { cycle: 7, until: now + 86400000 }, createdAt: now - 20 * 86400000
+  }] });
+  const r = bootWith({ [MAIN_K]: st, [BAK_K]: st });
+  r.qt.addRecord('r1', now - 1000, '', []);
+  const p = r.qt._getState().projects[0];
+  results.push(['A-2 A10：复吸后 seen 标记清空',
+    p.seenMilestones.length === 0 && p.seenReviewCycles.length === 0
+    && p.dismissedReviewBanner === null]);
+}
+// 13.11 A11：删除复盘后该周期放开提示（不再永久复发）
+{
+  const now = Date.now();
+  const st = JSON.stringify({ v: 7, categories: ['饮食'], projects: [{
+    id: 'rv', name: '复盘', emoji: '🧋', category: '', order: 0,
+    startTs: now - 20 * 86400000, records: [],
+    reviews: [{ id: 'rv1', cycleDays: 7, ts: now - 10 * 86400000, achievement: 'a', improvement: 'b', nextPlan: 'c' }],
+    bestStreak: 0, goalDays: 0, private: false, eyeOpen: false,
+    seenMilestones: [], seenReviewCycles: [7], dismissedReviewBanner: null, createdAt: now - 20 * 86400000
+  }] });
+  const r = bootWith({ [MAIN_K]: st, [BAK_K]: st });
+  r.qt.deleteReview('rv', 'rv1');
+  const p = r.qt._getState().projects[0];
+  results.push(['A-2 A11：删除复盘后该周期从 seen 移除',
+    p.reviews.length === 0 && p.seenReviewCycles.indexOf(7) === -1]);
+}
+// 13.12 A18：未达成目标时不得显示 100%
+{
+  const now = Date.now();
+  const st = JSON.stringify({ v: 7, categories: ['饮食'], projects: [{
+    id: 'g1', name: '目标', emoji: '🧋', category: '', order: 0,
+    startTs: now - 999 * 86400000, records: [], reviews: [],
+    bestStreak: 0, goalDays: 1000, private: false, eyeOpen: false,
+    seenMilestones: [], seenReviewCycles: [], dismissedReviewBanner: null, createdAt: now - 999 * 86400000
+  }] });
+  const r = bootWith({ [MAIN_K]: st, [BAK_K]: st });
+  r.qt.openDetail('g1');
+  const h = r.main.innerHTML;
+  results.push(['A-2 A18：999/1000 天不显示 100%',
+    h.indexOf('99%') >= 0 && h.indexOf('已达成') < 0]);
 }
 
 // 输出
