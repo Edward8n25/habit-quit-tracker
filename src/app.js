@@ -886,10 +886,33 @@
       back.querySelector('#qt-cat-add').addEventListener('click', doAdd);
       back.querySelector('#qt-cat-new').addEventListener('keydown', function (e) { if (e.key === 'Enter') doAdd(); });
       back.querySelector('#qt-cat-reset').addEventListener('click', function () {
-        resetCategories();
-        notify({ type: 'reset' });
-        closeModal(); openCategoryManager(onChanged);
-        toast('已恢复默认分类');
+        // A13：破坏性操作必须有二次确认 —— 原先一键清空自定义分类，
+        // 且不在默认列表里的项目会被静默打回"未分类"（默认名与用户实际分类名常常不同）
+        var affected = 0;
+        var defaults = DEFAULT_CATEGORIES;
+        state.projects.forEach(function (p) {
+          if (p.category && defaults.indexOf(p.category) === -1) affected++;
+        });
+        var depth = modalStack.length;
+        showModal('恢复默认分类？',
+          '<p class="dlg-note">将清空当前自定义分类，恢复为 '
+          + DEFAULT_CATEGORIES.length + ' 个默认分类。</p>'
+          + (affected
+              ? '<p class="dlg-note-sub">有 <b>' + affected + '</b> 个项目属于自定义分类，它们会变成「未分类」（项目与记录都不会丢失）。</p>'
+              : '')
+          + '<div class="modal-actions">'
+          + '  <button class="btn ghost" onclick="window.__qt.closeModal()">取消</button>'
+          + '  <button class="btn danger" id="qt-reset-ok">恢复默认</button>'
+          + '</div>',
+          function (b2) {
+            b2.querySelector('#qt-reset-ok').addEventListener('click', function () {
+              resetCategories();
+              notify({ type: 'reset' });
+              closeModalsAbove(depth);
+              openCategoryManager(onChanged);
+              toast('已恢复默认分类');
+            });
+          });
       });
     });
   }
@@ -1234,11 +1257,11 @@
 
     html += '<div class="row" style="margin-bottom: 12px;">'
          + '  <div style="font-size: 13px; color: var(--text-mute);">共 ' + all.length + ' 个项目</div>'
-         + (all.length > 1
+         + (sortMode || all.length > 1
              ? '<button class="btn small' + (sortMode ? ' active' : '') + '" style="margin-left: auto;" onclick="window.__qt.toggleSortMode()">'
                + (sortMode ? '完成' : '排序') + '</button>'
              : '')
-         + '  <button class="btn primary small" style="margin-left: ' + (all.length > 1 ? '8px' : 'auto') + ';" onclick="window.__qt.openNewProject()">+ 新建</button>'
+         + '  <button class="btn primary small" style="margin-left: ' + ((sortMode || all.length > 1) ? '8px' : 'auto') + ';" onclick="window.__qt.openNewProject()">+ 新建</button>'
          + '</div>';
 
     if (sortMode) {
@@ -1327,9 +1350,15 @@
     render();
   }
 
+  var sortModeFilterBefore = FILTER_ALL; // 进入排序模式前的筛选（退出时恢复，避免丢弃用户原有选择）
   function toggleSortMode() {
     sortMode = !sortMode;
-    if (sortMode) listFilter = FILTER_ALL; // 排序时只展示全部，避免"筛选后顺序"与"全局顺序"混淆
+    if (sortMode) {
+      sortModeFilterBefore = listFilter;
+      listFilter = FILTER_ALL; // 排序时只展示全部，避免"筛选后顺序"与"全局顺序"混淆
+    } else {
+      listFilter = sanitizeListFilter(sortModeFilterBefore); // A14：恢复进入前的筛选
+    }
     render();
   }
 
@@ -1515,34 +1544,28 @@
       });
     });
 
-    // 搜索框事件（输入时只刷新历史列表容器，不重建整个详情页；用 setTimeout 0 避免和 IME 冲突）
+    // 搜索框事件（N-01：只重绘结果行容器，输入框节点永不重建）
+    // 原实现用 box.innerHTML = renderHistoryList(p) 把输入框本身也换掉了，
+    // 监听器跟着旧节点一起消失 → 第一次防抖后继续打字完全无反应、光标还会跳回。
     var searchInput = main.querySelector('#qt-search');
     if (searchInput) {
       var wasFocused = searchInput === document.activeElement;
-      var cursorPos = searchInput.selectionStart;
       searchInput.addEventListener('input', function (e) {
         detailSearch = e.target.value;
         clearTimeout(searchTimer);
         searchTimer = setTimeout(function () {
           if (view !== 'detail') return;
-          var box = main.querySelector('#qt-history');
-          if (!box) return;
-          box.innerHTML = renderHistoryList(p);
-          // 还原焦点和光标
-          var ni = box.querySelector('#qt-search');
-          if (ni) {
-            ni.focus();
-            try { ni.setSelectionRange(cursorPos, cursorPos); } catch (e2) {}
-          }
+          var rows = main.querySelector('#qt-history-rows');
+          if (!rows) return;
+          rows.innerHTML = renderHistoryRows(p);
         }, SEARCH_DEBOUNCE);
       });
       if (wasFocused || detailSearch) searchInput.focus();
     }
   }
 
-  // 历史记录区（独立渲染：搜索时只重建本容器，日历/统计/复盘不受影响）
+  // 历史记录区（独立渲染：搜索时只重建结果行，日历/统计/复盘/输入框都不受影响）
   function renderHistoryList(p) {
-    var blurred = p.private && shouldBlur(p); // 隐私项目：历史列表区模糊（搜索框保留可输入，但结果不可读）
     var html = '<div class="section-title">破戒记录（' + p.records.length + '）</div>';
     if (p.records.length === 0) {
       html += '<div style="text-align: center; color: var(--text-mute); padding: 24px; font-size: 13px;">还没有破戒记录，继续保持</div>';
@@ -1552,22 +1575,29 @@
     html += '<div class="field" style="margin-bottom: 12px;">'
          + '  <input class="input" id="qt-search" placeholder="搜索备注或破戒原因…" value="' + esc(detailSearch) + '">'
          + '</div>';
+    // 结果行独立容器：搜索防抖只重绘这里
+    html += '<div id="qt-history-rows">' + renderHistoryRows(p) + '</div>';
+    return html;
+  }
 
+  // 结果行（不含搜索框）—— 供首次渲染与搜索防抖复用
+  function renderHistoryRows(p) {
+    var blurred = p.private && shouldBlur(p);
     // 倒序展示
     var sorted = p.records.slice().sort(function (a, b) { return recordTs(b) - recordTs(a); });
     var q = detailSearch.trim().toLowerCase();
     var filtered = sorted.filter(function (r) { return recordMatchesQuery(r, q); });
 
     if (filtered.length === 0) {
-      html += '<div style="text-align: center; color: var(--text-mute); padding: 24px; font-size: 13px;">没有匹配的记录</div>';
-      return html;
+      return '<div style="text-align: center; color: var(--text-mute); padding: 24px; font-size: 13px;">没有匹配的记录</div>';
     }
-    html += '<div class="history' + (blurred ? ' is-blurred' : '') + '">';
+    var html = '<div class="history' + (blurred ? ' is-blurred' : '') + '">';
     filtered.forEach(function (r) {
       var rTs = recordTs(r);
-      // 这一次的"坚持时长" = 与上一条的间隔
-      var prevIdx = p.records.findIndex(function (x) { return x.id === r.id; });
-      var s = prevIdx > 0 ? formatDuration(rTs - recordTs(p.records[prevIdx - 1])) : null;
+      // 这一次的"坚持时长" = 与上一条破戒（首条则与项目起点）的间隔
+      var idx = p.records.findIndex(function (x) { return x.id === r.id; });
+      var prevTs = idx === 0 ? projectStartTs(p) : recordTs(p.records[idx - 1]);
+      var s = (idx >= 0 && typeof prevTs === 'number') ? formatDuration(rTs - prevTs) : null;
       var note = recordNote(r);
       var tags = recordTags(r);
       var tagsHtml = (tags && tags.length)
@@ -1580,7 +1610,7 @@
            + (note ? '<div class="hi-note">' + esc(note) + '</div>' : '')
            + tagsHtml
            + '  </div>'
-           + (s ? '<div class="hi-streak">坚持<br><b style="color:var(--text);">' + s.compact + '</b></div>' : '<div class="hi-streak">首次创建</div>')
+           + (s ? '<div class="hi-streak">坚持<br><b style="color:var(--text);">' + s.compact + '</b></div>' : '')
            + '  <button class="hi-edit" onclick="window.__qt.openEditRecord(\'' + p.id + '\',\'' + r.id + '\')" aria-label="编辑" title="编辑">'
            + '    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>'
            + '  </button>'
@@ -2041,6 +2071,15 @@
     );
   }
 
+  // N-02：把弹窗栈收回到指定深度（不含 depth 那一层）。
+  // 场景：编辑记录/复盘弹窗内点"删除"，确认弹窗叠加在其上（栈深 2）；确认后若只 closeModal()
+  // 一次，编辑弹窗会残留在屏幕上，再点"保存"就出现"提示已保存但什么都没发生"的假成功。
+  // 用栈深而不是硬编码"连关两次"，避免嵌套层级变化后失效。
+  function closeModalsAbove(depth) {
+    var guard = 0;
+    while (modalStack.length > depth && guard++ < 20) closeModal();
+  }
+
   function closeModal() {
     var back = modalStack.pop();
     if (back) {
@@ -2244,7 +2283,7 @@
         back.querySelector('#qt-confirm').addEventListener('click', function () {
           state.projects = state.projects.filter(function (x) { return x.id !== id; });
           saveState();
-          closeModal();
+          closeModalsAbove(0); // N-02：删除项目可能从"编辑项目"弹窗进入，需收空整个栈
           view = 'list'; detailId = null;
           render();
           toast('已删除');
@@ -2254,7 +2293,11 @@
 
   function confirmDeleteRecord(pid, rid) {
     if (guardPrivate(getProject(pid))) return; // 演示模式锁定隐私项目
-    showModal('删除这条记录？', '<p style="color: var(--text-sub); font-size: 14px; margin: 0 0 8px;">删除后会自动重新计算统计数据。</p>'
+    var r = getProject(pid) && getProject(pid).records.find(function (x) { return x.id === rid; });
+    showModal('删除这条记录？',
+      '<p class="dlg-note">'
+      + (r ? '将删除 <b>' + formatDateTime(recordTs(r)) + '</b>' + (recordNote(r) ? '（' + esc(recordNote(r)) + '）' : '') + ' 这条记录。<br>' : '')
+      + '删除后会自动重新计算统计数据。</p>'
       + '<div class="modal-actions">'
       + '  <button class="btn ghost" onclick="window.__qt.closeModal()">取消</button>'
       + '  <button class="btn danger" id="qt-confirm">删除</button>'
@@ -2262,7 +2305,9 @@
       function (back) {
         back.querySelector('#qt-confirm').addEventListener('click', function () {
           deleteRecord(pid, rid);
-          closeModal();
+          // N-02：删除后清空整个弹窗栈。不能收回到"打开确认弹窗前的深度"——
+          // 那个深度里还留着已经失效的「编辑记录」弹窗（正是幽灵弹窗的来源）。
+          closeModalsAbove(0);
           render();
           toast('已删除');
         });
@@ -2296,7 +2341,13 @@
         var parsed = parseRecordTime(back.querySelector('#qt-time').value);
         if (!parsed.ok) { unlock(); toast(parsed.msg); return; }
         var note = back.querySelector('#qt-note').value;
-        updateRecord(pid, rid, parsed.ts, note, tagPicker.getValue());
+        // N-02：记录已不存在（多标签删除 / 幽灵弹窗）时不得再报"已保存"
+        if (!updateRecord(pid, rid, parsed.ts, note, tagPicker.getValue())) {
+          closeModal();
+          render();
+          toast('该记录已不存在，改动未保存');
+          return;
+        }
         closeModal();
         render();
         toast('已保存');
@@ -2357,10 +2408,27 @@
           toast('至少填写一项内容');
           return;
         }
-        // FL-6：所选周期大于当前坚持天数时提示（不阻断，避免将来该周期不再提醒复盘）
+        // N-03：原实现先 toast 警告再立刻 toast「复盘已保存」，而 toast() 会先删掉旧 toast，
+        // 那条警告用户永远看不到。改为明确的二次确认（不静默吞掉，也不被覆盖）。
         var currentDays = streak ? Math.floor(streak / DAY_MS) : 0;
         if (cycle > currentDays) {
-          toast('当前仅坚持 ' + currentDays + ' 天，选择 ' + cycle + ' 天周期可能不准确');
+          unlock();
+          showModal('复盘周期超过当前坚持天数',
+            '<p class="dlg-note">当前仅坚持 <b>' + currentDays + '</b> 天，你选择了 <b>' + cycle + '</b> 天周期。</p>'
+            + '<p class="dlg-note-sub">仍要按 ' + cycle + ' 天记这次复盘吗？</p>'
+            + '<div class="modal-actions">'
+            + '  <button class="btn ghost" onclick="window.__qt.closeModal()">改周期</button>'
+            + '  <button class="btn primary" id="qt-cycle-ok">仍要保存</button>'
+            + '</div>',
+            function (b2) {
+              b2.querySelector('#qt-cycle-ok').addEventListener('click', function () {
+                addReview(pid, cycle, ach, imp, next);
+                closeModalsAbove(0); // 保存后回到详情页，不留任何弹窗
+                render();
+                toast('复盘已保存');
+              });
+            });
+          return;
         }
         addReview(pid, cycle, ach, imp, next);
         closeModal();
@@ -2395,7 +2463,15 @@
         var ach = back.querySelector('#qt-ach').value;
         var imp = back.querySelector('#qt-imp').value;
         var next = back.querySelector('#qt-next').value;
-        updateReview(pid, rid, cycle, ach, imp, next);
+        // N-22：编辑路径补与新建一致的"至少填一项"校验（原先可存成全空卡片）
+        if (!ach.trim() && !imp.trim() && !next.trim()) { unlock(); toast('至少填写一项内容'); return; }
+        // N-02：复盘已不存在时不得再报"已保存"
+        if (!updateReview(pid, rid, cycle, ach, imp, next)) {
+          closeModal();
+          render();
+          toast('该复盘已不存在，改动未保存');
+          return;
+        }
         closeModal();
         render();
         toast('已保存');
@@ -2408,7 +2484,8 @@
 
   function confirmDeleteReview(pid, rid) {
     if (guardPrivate(getProject(pid))) return; // 演示模式锁定隐私项目
-    showModal('删除这条复盘？', '<p style="color: var(--text-sub); font-size: 14px; margin: 0 0 8px;">此操作不可撤销。</p>'
+    showModal('删除这条复盘？',
+      '<p class="dlg-note">此操作不可撤销。删除后该周期的复盘提示会重新放开。</p>'
       + '<div class="modal-actions">'
       + '  <button class="btn ghost" onclick="window.__qt.closeModal()">取消</button>'
       + '  <button class="btn danger" id="qt-confirm">删除</button>'
@@ -2416,7 +2493,7 @@
       function (back) {
         back.querySelector('#qt-confirm').addEventListener('click', function () {
           deleteReview(pid, rid);
-          closeModal();
+          closeModalsAbove(0); // N-02：同上，清空整栈避免留下已失效的「编辑复盘」弹窗
           render();
           toast('已删除');
         });
@@ -3114,6 +3191,9 @@
     if (/demo=1/.test(location.search)) {
       setDemoMode(true);
       updateDemoBtn(true);
+      // A17：上面 render() 已在 demo 开启前完成，首帧内容不会模糊（隐私项目若 eyeOpen=true 会漏出）。
+      // 必须在开启后重绘一次，否则演示模式截图入口恰好是隐私泄露窗口。
+      render();
     }
 
     // 暴露给内联事件
@@ -3175,7 +3255,21 @@
       computeBadges: computeBadges,
       buildInsights: buildInsights,
       buildRecordCountMap: buildRecordCountMap,
-      buildReviewBanner: buildReviewBanner
+      buildReviewBanner: buildReviewBanner,
+      // A-3 测试钩子：搜索分区渲染 / 弹窗栈深 / 排序模式 / 演示模式
+      renderHistoryList: renderHistoryList,
+      renderHistoryRows: renderHistoryRows,
+      closeModalsAbove: closeModalsAbove,
+      toggleSortMode: toggleSortMode,
+      setDemoMode: setDemoMode,
+      shouldBlur: shouldBlur,
+      modalDepth: function () { return modalStack.length; },
+      setDetailSearch: function (q) { detailSearch = q; },
+      getDetailSearch: function () { return detailSearch; },
+      isSortMode: function () { return sortMode; },
+      getListFilter: function () { return listFilter; },
+      _setDemoMode: setDemoMode,
+      _isDemoMode: isDemoMode
     };
   }
 

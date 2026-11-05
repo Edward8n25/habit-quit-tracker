@@ -57,7 +57,8 @@ FileReaderStub.prototype.readAsText = function (file) {
   this.onload({ target: { result: file.content } });
 };
 
-function boot(seedObj) {
+function boot(seedObj, opts) {
+  opts = opts || {};
   proxies = new Map();
   const store = Object.assign({}, seedObj || {});
   const main = makeEl();
@@ -83,7 +84,7 @@ function boot(seedObj) {
     pageYOffset: 0,
     addEventListener() {},
     matchMedia: () => ({ matches: false, addEventListener() {} }),
-    location: { hash: '', search: '' },
+    location: { hash: '', search: opts.search || '' },
     navigator: {}, document: doc, localStorage: ls,
     setInterval: () => 1, clearInterval() {}, setTimeout, clearTimeout
   };
@@ -325,6 +326,140 @@ function importBackup(r, content, mode) {
   r.qt.goHome();
   results.push(['滚动记忆：返回首页恢复离开时的 500px', !!r.win._lastScroll && r.win._lastScroll.top === 500,
     'top=' + (r.win._lastScroll || {}).top]);
+}
+
+// ============ A-3 批次（交互与反馈）新增断言 ============
+// 15.1 N-01：搜索框与结果行必须是两个独立节点（否则防抖重绘会把输入框连同监听器一起换掉）
+{
+  const r = fresh();
+  const p = JSON.parse(r.store['quit-tracker-v1']).projects[0];
+  const listHtml = r.qt.renderHistoryList(p);
+  results.push(['A-3 N-01：搜索框与结果行分离（输入框不在结果容器内）',
+    listHtml.indexOf('id="qt-search"') >= 0 && listHtml.indexOf('id="qt-history-rows"') >= 0
+    && listHtml.indexOf('qt-history-rows') > listHtml.indexOf('id="qt-search"')]);
+  // 结果行渲染函数不得包含搜索框
+  results.push(['A-3 N-01：结果行渲染不含搜索框',
+    r.qt.renderHistoryRows(p).indexOf('id="qt-search"') < 0]);
+}
+// 15.2 N-01：二次搜索仍生效（detailSearch 变化后结果行内容随之变化）
+{
+  const r = fresh();
+  const p = JSON.parse(r.store['quit-tracker-v1']).projects[0];
+  r.qt.setDetailSearch('');
+  const all = r.qt.renderHistoryRows(p);
+  r.qt.setDetailSearch('不存在的关键词');
+  const none = r.qt.renderHistoryRows(p);
+  results.push(['A-3 N-01：搜索词变化后结果行内容随之变化',
+    all.indexOf('history-item') >= 0 && none.indexOf('history-item') < 0
+    && none.indexOf('没有匹配的记录') >= 0]);
+}
+// 15.3 N-02：删除记录后弹窗栈必须收回到调用前深度（不留幽灵编辑弹窗）
+{
+  // 用 v7 夹具（v6 的唯一记录会被迁移成 startTs，就没有可编辑的破戒记录了）
+  const v7 = JSON.stringify({ v: 7, categories: ['饮食', '烟酒'], projects: [{
+    id: 'n2', name: '幽灵弹窗', emoji: '🧋', category: '饮食', order: 0,
+    startTs: Date.now() - 5 * 86400000,
+    records: [{ id: 'n2r', t: Date.now() - 2 * 86400000, n: '', tags: [] }],
+    reviews: [], bestStreak: 0, goalDays: 0, private: false, eyeOpen: false,
+    seenMilestones: [], seenReviewCycles: [], dismissedReviewBanner: null, createdAt: Date.now() - 5 * 86400000
+  }] });
+  const r = boot({ 'quit-tracker-v1': v7, 'quit-tracker-v1.bak': v7 });
+  r.qt.openEditRecord('n2', 'n2r');          // 栈深 1
+  const before = r.qt.modalDepth();
+  r.qt.confirmDeleteRecord('n2', 'n2r');     // 栈深 2
+  const stacked = r.qt.modalDepth();
+  const ok = clickOn('#qt-confirm');         // 模拟点击确认删除
+  const after = r.qt.modalDepth();
+  results.push(['A-3 N-02：编辑记录内删除后弹窗栈归零',
+    before === 1 && stacked === 2 && ok && after === 0,
+    'before=' + before + ' stacked=' + stacked + ' after=' + after]);
+}
+// 15.4 N-02：删除复盘后弹窗栈同样归零
+{
+  const v7 = JSON.stringify({ v: 7, categories: ['饮食'], projects: [{
+    id: 'n3', name: '幽灵复盘', emoji: '🧋', category: '', order: 0,
+    startTs: Date.now() - 5 * 86400000, records: [], reviews: [], bestStreak: 0,
+    goalDays: 0, private: false, eyeOpen: false, seenMilestones: [],
+    seenReviewCycles: [], dismissedReviewBanner: null, createdAt: Date.now() - 5 * 86400000
+  }] });
+  const r = boot({ 'quit-tracker-v1': v7, 'quit-tracker-v1.bak': v7 });
+  r.qt.addReview('n3', 3, '成就', '不足', '计划');
+  const st = JSON.parse(r.store['quit-tracker-v1']);
+  const rid = st.projects[0].reviews[0].id;
+  r.qt.openEditReview('n3', rid);         // 栈深 1
+  r.qt.confirmDeleteReview('n3', rid);    // 栈深 2
+  const stacked = r.qt.modalDepth();
+  const ok = clickOn('#qt-confirm');
+  results.push(['A-3 N-02：编辑复盘内删除后弹窗栈归零',
+    stacked === 2 && ok && r.qt.modalDepth() === 0,
+    'stacked=' + stacked + ' after=' + r.qt.modalDepth()]);
+}
+// 15.5 A14：排序模式在只剩 1 个项目时仍可退出，且退出后恢复原筛选
+{
+  const r = fresh();
+  r.qt.setListFilter('饮食');
+  const filterBefore = r.qt.getListFilter();
+  r.qt.toggleSortMode();
+  const inSort = r.qt.isSortMode();
+  const sortFilter = r.qt.getListFilter();
+  r.qt.toggleSortMode();
+  results.push(['A-3 A14：排序模式可退出且恢复原筛选',
+    filterBefore === '饮食' && inSort === true && sortFilter === ''
+    && r.qt.isSortMode() === false && r.qt.getListFilter() === '饮食',
+    'before=' + filterBefore + ' inSort=' + inSort + ' restored=' + r.qt.getListFilter()]);
+}
+// 15.6 A14：只剩 1 个项目时首页仍渲染"完成"按钮（否则排序模式死锁）
+{
+  const one = JSON.stringify({ v: 7, categories: ['饮食'], projects: [{
+    id: 'solo', name: '唯一项目', emoji: '🧋', category: '饮食', order: 0,
+    startTs: Date.now() - 86400000, records: [], reviews: [], bestStreak: 0, goalDays: 0,
+    private: false, eyeOpen: false, seenMilestones: [], seenReviewCycles: [],
+    dismissedReviewBanner: null, createdAt: Date.now() - 86400000
+  }] });
+  const r = boot({ 'quit-tracker-v1': one, 'quit-tracker-v1.bak': one });
+  r.qt.toggleSortMode();
+  const html = r.main.innerHTML;
+  results.push(['A-3 A14：仅 1 个项目时排序模式仍可退出',
+    r.qt.isSortMode() === true && html.indexOf('完成') >= 0]);
+}
+// 15.7 N-12：隐私项目模糊态下拒绝打开"记录破戒"弹窗（防明文泄露名称与时长）
+{
+  const priv = JSON.stringify({ v: 7, categories: ['饮食'], projects: [{
+    id: 'pv', name: '隐私项目', emoji: '🔒', category: '', order: 0,
+    startTs: Date.now() - 86400000, records: [], reviews: [], bestStreak: 0, goalDays: 0,
+    private: true, eyeOpen: false, seenMilestones: [], seenReviewCycles: [],
+    dismissedReviewBanner: null, createdAt: Date.now() - 86400000
+  }] });
+  const r = boot({ 'quit-tracker-v1': priv, 'quit-tracker-v1.bak': priv });
+  const depthBefore = r.qt.modalDepth();
+  r.qt.openAddRecord('pv');
+  results.push(['A-3 N-12：隐私项目模糊态拒绝打开记录弹窗',
+    r.qt.modalDepth() === depthBefore]);
+}
+// 15.8 A17：?demo=1 开启后必须重绘（首帧不得残留明文）
+{
+  const priv = JSON.stringify({ v: 7, categories: ['饮食'], projects: [{
+    id: 'pv2', name: '隐私项目2', emoji: '🔒', category: '', order: 0,
+    startTs: Date.now() - 86400000, records: [], reviews: [], bestStreak: 0, goalDays: 0,
+    private: true, eyeOpen: true, seenMilestones: [], seenReviewCycles: [],
+    dismissedReviewBanner: null, createdAt: Date.now() - 86400000
+  }] });
+  const r = boot({ 'quit-tracker-v1': priv, 'quit-tracker-v1.bak': priv }, { search: '?demo=1' });
+  results.push(['A-3 A17：?demo=1 首帧即模糊（已重绘）',
+    r.qt._isDemoMode() === true && r.main.innerHTML.indexOf('is-blurred') >= 0]);
+}
+// 15.9 A13：恢复默认分类必须走二次确认（不得直接执行）
+{
+  const r = fresh();
+  r.qt.openSettings();
+  clickOn('#qt-cat-manage');            // 打开分类管理
+  const depthBefore = r.qt.modalDepth();
+  clickOn('#qt-cat-reset');             // 点"恢复默认"→ 应弹出确认而不是直接执行
+  const depthAfter = r.qt.modalDepth();
+  const cats = JSON.parse(r.store['quit-tracker-v1']).categories;
+  results.push(['A-3 A13：恢复默认分类先弹确认（未直接执行）',
+    depthAfter === depthBefore + 1 && cats.join('|') === '饮食|烟酒',
+    'depth ' + depthBefore + '→' + depthAfter + ' cats=' + cats.join('|')]);
 }
 
 // ---------- 输出 ----------
