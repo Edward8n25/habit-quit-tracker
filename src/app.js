@@ -10,6 +10,7 @@
   // ---------- 常量 ----------
   var STORAGE_KEY = 'quit-tracker-v1';
   var STORAGE_BACKUP_KEY = 'quit-tracker-v1.bak'; // 双 key 冗余：主 key 损坏时可回退备份
+  var CORRUPT_KEY_PREFIX = 'quit-tracker-v1.corrupt-'; // 主备全损时另存损坏原文（N-05 逃生口）
   var THEME_KEY = 'quit-tracker-theme';
   var ACCENT_KEY = 'quit-tracker-accent'; // 配色方案（设置内切换）：green | ocean | teal | sunset，默认 green
   var ACCENT_LIST = ['green', 'ocean', 'teal', 'sunset'];
@@ -122,7 +123,22 @@
         return r;
       }
       return null;
-    }).filter(Boolean).sort(function (a, b) { return a.t - b.t; });
+    }).filter(Boolean);
+    // N-07：导入/加载路径的时间上界归一。未来时间戳会让计时为负（被夹 0 显示"0 天"）、
+    // 让"刚刚"永远成立。注意下界不设：ts=0（1970-01-01T00:00）是 BUG-E1 明确保留的合法输入。
+    var futureLimit = Date.now() + FUTURE_TOLERANCE_MS;
+    p.records.forEach(function (r) {
+      if (r.t > futureLimit) r.t = Date.now();
+    });
+    // N-07：同一项目内 record.id 必须唯一 —— 删除按 id 过滤（deleteRecord），
+    // 重复 id 会让删一条连带删多条。重复者重生成 id（不丢记录）。
+    var seenIds = {};
+    p.records.forEach(function (r) {
+      if (seenIds[r.id]) r.id = uid();
+      seenIds[r.id] = true;
+    });
+    // 归一可能改变时间顺序（未来时间被拉回当前），排序放在归一之后
+    p.records.sort(function (a, b) { return a.t - b.t; });
     if (!Array.isArray(p.reviews)) p.reviews = [];
     p.reviews = p.reviews.filter(function (r) { return r && typeof r === 'object'; }).map(function (r) {
       r.id = safeId(r.id); // reviews[].id 同样会拼进 data-rid 与 onclick
@@ -170,17 +186,45 @@
     return { v: SCHEMA_VERSION, projects: [], categories: DEFAULT_CATEGORIES.slice() };
   }
 
+  // 双 key 全损时的逃生口（N-05）：把损坏原文另存到一个独立 key，再回退空态。
+  // 否则用户任意一次操作就会用空态覆盖两个 key，原文永久不可恢复；
+  // 而尾部截断的 JSON 往往只坏几个字节，原文仍有救。
+  // key 名带本地时间戳（同一分钟内重复损坏会覆盖同一个 key，避免无限累积撑爆配额）。
+  function stashCorruptRaw(rawMain, rawBak) {
+    var stamp = formatDateTime(Date.now()).replace(/[-: ]/g, '');
+    var key = CORRUPT_KEY_PREFIX + stamp;
+    var parts = [];
+    if (rawMain) parts.push('[主 key]\n' + rawMain);
+    if (rawBak) parts.push('[备份 key]\n' + rawBak);
+    if (!parts.length) return null;
+    try {
+      localStorage.setItem(key, parts.join('\n\n'));
+      return key;
+    } catch (e) {
+      return null; // 配额满等写入失败不阻塞启动
+    }
+  }
+
   function loadState() {
     var rawMain = readKey(STORAGE_KEY);
+    var rawBak = readKey(STORAGE_BACKUP_KEY);
     var data = safeParse(rawMain);
     var recovered = false;
     if (!data) {
       // 主 key 缺失或损坏（含 JSON 解析失败）→ 回退备份
-      data = safeParse(readKey(STORAGE_BACKUP_KEY));
+      data = safeParse(rawBak);
       if (data) recovered = true;
     }
     if (!data) {
-      if (rawMain) setTimeout(function () { toast('本地数据读取失败，已重置'); }, 0);
+      // 主备都不可用：先把损坏原文另存，再回退空态（顺序不可颠倒，saveState 会覆盖双 key）
+      var stashed = stashCorruptRaw(rawMain, rawBak);
+      if (rawMain || rawBak) {
+        setTimeout(function () {
+          toast(stashed
+            ? '本地数据读取失败，原始内容已另存为 ' + stashed
+            : '本地数据读取失败，已重置');
+        }, 0);
+      }
       return emptyState();
     }
     try {
@@ -2016,15 +2060,20 @@
         var unlock = lockSaveBtn(back.querySelector('#qt-save-btn'));
         var name = back.querySelector('#qt-name').value.trim();
         if (!name) { unlock(); toast('请填写项目名称'); return; }
-        p.name = name;
-        p.emoji = emojiPicker.getValue();
         var goalVal = parseInt(back.querySelector('#qt-goal').value, 10);
         if (!isNaN(goalVal) && goalVal > 3650) { unlock(); toast('目标天数最多 3650 天'); return; }
-        p.goalDays = (!isNaN(goalVal) && goalVal > 0) ? goalVal : 0;
+        // N-04：多标签页下弹窗打开期间，storage 事件可能已把 state 整库替换，
+        // 闭包捕获的 p 已不在 state.projects 里。此刻写 p 会被 saveState 丢弃（静默丢改动）。
+        // 必须按 id 重新取当前对象；取不到说明项目已被其他标签页删除。
+        var live = getProject(id);
+        if (!live) { closeModal(); render(); toast('该项目已被其他标签页删除，改动未保存'); return; }
+        live.name = name;
+        live.emoji = emojiPicker.getValue();
+        live.goalDays = (!isNaN(goalVal) && goalVal > 0) ? goalVal : 0;
         // 隐私标记切换：勾选=设为隐私；取消勾选=转公开（同时清除可能残留的隐藏状态）
-        p.private = back.querySelector('#qt-private').checked;
-        p.category = catPicker.getValue();
-        if (!p.private) p.eyeOpen = false;
+        live.private = back.querySelector('#qt-private').checked;
+        live.category = catPicker.getValue();
+        if (!live.private) live.eyeOpen = false;
         saveState();
         closeModal();
         render();
@@ -2667,8 +2716,14 @@
         var a = document.createElement('a');
         a.href = url;
         a.download = 'quit-tracker-backup-' + formatDateTime(Date.now()).slice(0, 10) + '.json'; // 本地日期（toISOString 是 UTC，东八区 0-8 点会标成昨天）
+        // N-40：<a> 必须先进 DOM 再 click（部分浏览器对游离节点不触发下载），
+        // revoke 必须延后（同步 revoke 会取消正在进行的下载，Safari/移动端尤甚）。
+        // 与 PNG 导出路径（exportCanvasPng）保持同一写法。
+        a.style.display = 'none';
+        document.body.appendChild(a);
         a.click();
-        URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+        setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
         toast('已导出');
       });
 
@@ -2679,9 +2734,13 @@
         fileInput.click();
       });
       fileInput.addEventListener('change', function (e) {
+        var file = e.target.files[0];
+        // N-39：立即重置 file input 的值 —— 否则用户选同一个文件第二次时 change 不触发，
+        // 界面完全无反应（浏览器只在 value 变化时派发 change）。
+        // 放在演示模式拦截之前：拦截后也应能重新选同一文件。
+        fileInput.value = '';
         // 双保险：即便文件选择器在开启演示模式前已被唤起，这里也必须拦下（批次 2 BUG-P1）
         if (isDemoMode()) { toast('对外展示模式中，数据导入已锁定'); return; }
-        var file = e.target.files[0];
         if (!file) return;
         var reader = new FileReader();
         reader.onload = function (ev) {
@@ -2990,7 +3049,11 @@
       closeModal: closeModal,
       openSettings: openSettings,
       // 测试钩子（与 normalizeCategory 等同理）：延后自动弹窗队列长度，供 tests 验证多周期不丢失
-      pendingAutoModalCount: function () { return pendingAutoModals.length; }
+      pendingAutoModalCount: function () { return pendingAutoModals.length; },
+      // A-1 测试钩子：迁移管道 / 损坏逃生口 / 当前 state 引用（供 tests 直接构造场景）
+      migrateProject: migrateProject,
+      stashCorruptRaw: stashCorruptRaw,
+      _getState: function () { return state; }
     };
   }
 

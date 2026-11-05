@@ -619,6 +619,91 @@ const seedV5 = { [MAIN_K]: projV5, [BAK_K]: projV5 };
     out.join('|') === 'A|B' && f('not-an-array').length === 0 && f([]).length === 0]);
 }
 
+// ============ A-1 批次（数据安全）新增断言 ============
+// 12.1 N-05：主备双损时必须另存损坏原文，否则下一次保存会永久覆盖
+{
+  const bad = '{"v":6,"projects":[{"id":"x","name":"尾部截断';
+  const r = bootWith({ [MAIN_K]: bad, [BAK_K]: 'also broken{' });
+  const keys = Object.keys(r.store).filter(k => k.indexOf('quit-tracker-v1.corrupt-') === 0);
+  results.push(['A-1 N-05：主备双损 → 另存损坏原文 key', keys.length === 1]);
+  results.push(['A-1 N-05：损坏原文内容被完整保留',
+    keys.length === 1 && r.store[keys[0]].indexOf('尾部截断') >= 0
+    && r.store[keys[0]].indexOf('also broken{') >= 0]);
+  results.push(['A-1 N-05：双损仍回退空态（不崩）',
+    r.err === null && r.main.innerHTML.indexOf('还没有追踪项目') >= 0]);
+}
+// 12.2 N-05：主 key 损坏但备份可用时，不应另存 corrupt（备份已救回，无损失）
+{
+  const r = bootWith({ [MAIN_K]: '{"v":6,', [BAK_K]: JSON.stringify({ v: 6, projects: [], categories: ['饮食'] }) });
+  const keys = Object.keys(r.store).filter(k => k.indexOf('quit-tracker-v1.corrupt-') === 0);
+  results.push(['A-1 N-05：备份可用时不产生 corrupt key', keys.length === 0]);
+}
+// 12.3 N-05：全新用户（无任何 key）不产生 corrupt key
+{
+  const r = bootWith({});
+  const keys = Object.keys(r.store).filter(k => k.indexOf('quit-tracker-v1.corrupt-') === 0);
+  results.push(['A-1 N-05：全新用户不产生 corrupt key', keys.length === 0]);
+}
+// 12.4 N-07：未来时间戳归一（否则计时为负、显示"0 天"）
+{
+  const now = Date.now();
+  const future = now + 365 * 86400000;
+  const st = JSON.stringify({ v: 6, categories: ['饮食'], projects: [{
+    id: 'fu1', name: '未来记录', emoji: '🧋', category: '', order: 0,
+    records: [{ id: 'fu0', t: now - 86400000, n: '', tags: [] },
+              { id: 'fu1', t: future, n: '', tags: [] }],
+    reviews: [], bestStreak: 0, goalDays: 0, private: false, eyeOpen: false,
+    seenMilestones: [], seenReviewCycles: [], dismissedReviewBanner: null, createdAt: now - 86400000
+  }] });
+  const r = bootWith({ [MAIN_K]: st, [BAK_K]: st });
+  const p = r.qt._getState().projects[0];
+  const maxT = Math.max.apply(null, p.records.map(x => x.t));
+  results.push(['A-1 N-07：未来时间戳被归一到当前', maxT <= Date.now() + 60000]);
+}
+// 12.5 N-07：ts=0（1970）仍是合法输入，不得被归一（BUG-E1 已确立）
+{
+  const st = JSON.stringify({ v: 6, categories: ['饮食'], projects: [{
+    id: 'z0', name: '纪元', emoji: '🧋', category: '', order: 0,
+    records: [{ id: 'z0r', t: 0, n: '', tags: [] }],
+    reviews: [], bestStreak: 0, goalDays: 0, private: false, eyeOpen: false,
+    seenMilestones: [], seenReviewCycles: [], dismissedReviewBanner: null, createdAt: 0
+  }] });
+  const r = bootWith({ [MAIN_K]: st, [BAK_K]: st });
+  const p = r.qt._getState().projects[0];
+  results.push(['A-1 N-07：ts=0 不被归一（保留 BUG-E1 语义）', p.records[0].t === 0]);
+}
+// 12.6 N-07：重复 record.id 去重（否则删一条连带删多条）
+{
+  const now = Date.now();
+  const st = JSON.stringify({ v: 6, categories: ['饮食'], projects: [{
+    id: 'dup', name: '重复 id', emoji: '🧋', category: '', order: 0,
+    records: [{ id: 'same', t: now - 3 * 86400000, n: '', tags: [] },
+              { id: 'same', t: now - 2 * 86400000, n: '', tags: [] },
+              { id: 'same', t: now - 1 * 86400000, n: '', tags: [] }],
+    reviews: [], bestStreak: 0, goalDays: 0, private: false, eyeOpen: false,
+    seenMilestones: [], seenReviewCycles: [], dismissedReviewBanner: null, createdAt: now - 3 * 86400000
+  }] });
+  const r = bootWith({ [MAIN_K]: st, [BAK_K]: st });
+  const p = r.qt._getState().projects[0];
+  const ids = p.records.map(x => x.id);
+  results.push(['A-1 N-07：重复 record.id 被去重且不丢记录',
+    ids.length === 3 && ids.filter((v, i) => ids.indexOf(v) === i).length === 3]);
+}
+// 12.7 N-07：迁移管道幂等（重复跑不改变结果）
+{
+  const now = Date.now();
+  const p = { id: 'idem', name: '幂等', emoji: '🧋', category: '', order: 0,
+    records: [{ id: 'a', t: now - 2 * 86400000, n: '', tags: [] },
+              { id: 'b', t: now - 86400000, n: '', tags: [] }],
+    reviews: [], bestStreak: 0, goalDays: 0, private: false, eyeOpen: false,
+    seenMilestones: [], seenReviewCycles: [], dismissedReviewBanner: null, createdAt: now - 2 * 86400000 };
+  const r = bootWith({});
+  const cats = ['饮食'];
+  const once = JSON.stringify(r.qt.migrateProject(JSON.parse(JSON.stringify(p)), cats));
+  const twice = JSON.stringify(r.qt.migrateProject(JSON.parse(JSON.stringify(p)), cats));
+  results.push(['A-1 N-07：migrateProject 幂等（同输入同输出）', once === twice]);
+}
+
 // 输出
 let pass = 0;
 results.forEach(([name, ok]) => {
