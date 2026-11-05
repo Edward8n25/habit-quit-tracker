@@ -37,7 +37,7 @@
 - **编辑项目新增「开始时间」字段**：可调整项目起点，保存时校验不得晚于第一条破戒记录，并重算历史最长。
 - **损坏数据逃生口**：主 key 与备份 key 同时损坏时，先把原始内容另存为 `quit-tracker-v1.corrupt-<时间戳>`，再回退空态。此前任意一次保存都会用空态永久覆盖双 key（而尾部截断的 JSON 往往只坏几个字节，原文仍有救）。
 - **静态资源校验脚本 `scripts/check-assets.js`（8 断言）**：校验 SW 的 `ASSETS` 与磁盘一致性、CACHE 名前缀、manifest 图标路径与 PNG 尺寸、`index.html` 本地引用与绝对路径、SW 注册调用。`caches.addAll` 是原子操作，任一资源 404 会让离线能力静默失效——此前无任何自动化覆盖。
-- **CI 接入 4 层测试**：`pages.yml` 新增 `test` job（语法检查 + smoke + picker + style + assert-sw + check-assets），失败则不部署；发布产物收窄到 `_site/`，不再把 `tests/`、`scripts/` 推到站点上。
+- **CI 接入 5 层测试**：`pages.yml` 新增 `test` job（语法检查 + smoke + picker + style + assert-sw + check-assets），`deploy` 依赖它，失败则不部署；PR 上也跑测试作为合并门禁（但不部署）。发布范围保持全量——`tests/fixture-picker.html` 是 v3 规范 §7.4 上线核验清单的线上回归入口，收窄会破坏该流程；`.dev/` 已被 `.gitignore` 排除，不会进仓库也就不可能被部署。
 - **测试钩子**：`__qt` 新增迁移管道、记录 CRUD、起点/计时、搜索分区渲染、弹窗栈深、分类保留名判定等入口，供回归脚本直接驱动。
 
 ### 变更

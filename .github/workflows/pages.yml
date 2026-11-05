@@ -17,8 +17,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # N-30：4 层测试必须先跑，失败则不部署。
+  # N-30：5 层测试必须先跑，失败则不部署。
   # 原先 workflow 只做 checkout → upload → deploy，140 条断言全靠手动，任何回归都能直接上线。
+  # PR 上也跑测试（作为合并门禁），但不部署。
   test:
     runs-on: ubuntu-latest
     steps:
@@ -43,6 +44,8 @@ jobs:
 
   deploy:
     needs: test
+    # PR 只跑测试不部署：github-pages 环境在 PR 上无部署权限，否则 workflow 会红
+    if: github.event_name != 'pull_request'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -52,16 +55,13 @@ jobs:
         uses: actions/checkout@v4
       - name: Setup Pages
         uses: actions/configure-pages@v5
-      # N-30：只发布运行产物，不把 tests/ / scripts/ / .dev 推到站点上
-      - name: 组装发布目录
-        run: |
-          mkdir -p _site
-          cp index.html sw.js manifest.json LICENSE _site/
-          cp -r src assets docs _site/
+      # 保持全量部署（含 tests/）：tests/fixture-picker.html 用 '../index.html' 加载真实页面，
+      # 是 v3 规范 §7.4 上线核验清单的线上回归入口，收窄发布范围会破坏这条既有流程。
+      # .dev/ 已被 .gitignore 排除，不进仓库也就不可能被部署。
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: "_site"
+          path: "."
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
