@@ -4,16 +4,35 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <meta name="theme-color" content="#121212" />
+  <meta name="color-scheme" content="light dark" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <meta name="apple-mobile-web-app-title" content="戒断" />
   <link rel="manifest" href="manifest.json" />
   <link rel="icon" href="assets/icons/icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="assets/icons/icon-192.png" />
   <title>戒断 · 习惯追踪</title>
+  <script>
+    /* N-25：在 CSS 解析前同步设置 data-theme，消除深色用户的冷启动白闪。
+       原先 data-theme 只由 app.js 末尾的 init() 设置，而 CSS 默认是浅色，
+       深色用户每次打开都会先看到一帧纯白。
+       这里读与 app.js 相同的 THEME_KEY / 值域，逻辑必须保持一致。 */
+    (function () {
+      try {
+        var pref = localStorage.getItem('quit-tracker-theme');
+        var dark = pref === 'dark'
+          || (pref === 'auto' && window.matchMedia
+              && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        if (dark) document.documentElement.setAttribute('data-theme', 'dark');
+      } catch (e) {}
+    })();
+  </script>
   <style>
     /* ============== Spotify-inspired theme ============== */
     :root {
+      /* N-26：让原生控件（select / datetime-local / number / checkbox）跟随主题，
+         否则深色下它们仍是浅色外观，日期图标在深底上可能不可见 */
+      color-scheme: light;
       --bg: #ffffff;
       --bg-elev: #f6f6f6;
       --bg-card: #ffffff;
@@ -49,6 +68,7 @@
       --accent-tint-35: rgba(29,185,84,.35);
     }
     [data-theme="dark"] {
+      color-scheme: dark; /* N-26：原生控件跟随深色 */
       --bg: #121212;
       --bg-elev: #181818;
       --bg-card: #181818;
@@ -105,6 +125,13 @@
     .dot-teal { background: #2dd4bf; }
     .dot-sunset { background: #f97316; }
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    /* N-16：键盘焦点必须可见。tap-highlight 抹掉了触屏反馈，这里补回键盘焦点环；
+       用 :focus-visible 而非 :focus，鼠标点击不显示，只在键盘 / 辅助设备导航时出现 */
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-xs); }
+    /* 触屏设备上不显示焦点环（避免点按残留），键盘仍显示 */
+    @media (hover: none) and (pointer: coarse) {
+      :focus-visible { outline: none; }
+    }
     html, body {
       margin: 0; padding: 0;
       background: var(--bg);
@@ -137,6 +164,12 @@
       width: 36px; height: 36px; border-radius: 50%;
       display: inline-flex; align-items: center; justify-content: center;
       cursor: pointer; transition: background .15s, color .15s;
+      position: relative;
+    }
+    /* N-18：触控目标扩到 44px（视觉尺寸不变，用伪元素扩命中区）。
+       小图标按钮（32px / 26px / 14px）同理，见各区块的 ::after 规则 */
+    .icon-btn::after, .back-btn::after {
+      content: ''; position: absolute; inset: -4px;
     }
     .icon-btn { background: transparent; }
     .icon-btn:hover { background: var(--tap); }
@@ -291,11 +324,14 @@
       font-family: inherit;
       line-height: 1;
       vertical-align: middle;
-      min-height: 36px;
+      min-height: 44px; /* N-18：触控目标下限 44px（原 36px） */
       box-sizing: border-box;
       text-align: center;
       white-space: nowrap;
     }
+    /* N-18：小尺寸按钮（排序/完成/新建）保留紧凑视觉，用伪元素把命中区补到 44px */
+    .btn.small { position: relative; }
+    .btn.small::after { content: ''; position: absolute; inset: -5px -2px; }
     /* 强制按钮内文字和 emoji 严格垂直居中（Windows 上 emoji 容易下沉） */
     .btn { font-variant-emoji: text; }
     .btn > * { display: inline-flex; align-items: center; line-height: 1; }
@@ -378,6 +414,11 @@
       width: 32px; height: 32px; border-radius: 50%; flex: 0 0 auto;
       display: inline-flex; align-items: center; justify-content: center;
       padding: 0; cursor: pointer; transition: background .15s, color .15s;
+      position: relative;
+    }
+    /* N-18：32px 按钮的触控命中区扩到 44px */
+    .hi-del::after, .hi-edit::after, .pc-eye::after {
+      content: ''; position: absolute; inset: -6px;
     }
     .hi-del:hover { color: var(--danger); background: var(--tap); }
     .hi-edit:hover, .pc-eye:hover { color: var(--text); background: var(--tap); }
@@ -439,7 +480,10 @@
     }
     .modal h2 { margin: 0 0 16px; font-size: 18px; font-weight: 700; }
     .field { margin-bottom: 14px; }
-    .field label { display: block; font-size: 12px; color: var(--text-sub); font-weight: 600; margin-bottom: 6px; }
+    /* N-15：表单标签必须是 <label for="..."> 才能给输入框提供可访问名称；
+       分组标题（主题 / 配色 / 分类 / 数据管理）不是控件标签，改用 .field-label */
+    .field label, .field-label { display: block; font-size: 12px; color: var(--text-sub); font-weight: 600; margin-bottom: 6px; }
+    /* N-19：iOS Safari 在 font-size < 16px 时聚焦输入框会自动放大整页 */
     .input, .textarea {
       width: 100%;
       background: var(--bg-input);
@@ -447,7 +491,7 @@
       color: var(--text);
       border-radius: var(--radius-sm);
       padding: 11px 14px;
-      font-size: 15px;
+      font-size: 16px;
       font-family: inherit;
       outline: none;
       transition: border-color .12s;
@@ -490,7 +534,8 @@
     .poster-days { font-size: 52px; font-weight: 800; letter-spacing: -2px; line-height: 1; font-variant-numeric: tabular-nums; }
     .poster-unit { font-size: 13px; color: #b3b3b3; margin-top: 2px; }
     .poster-goal { text-align: center; font-size: 13px; color: #b3b3b3; }
-    .poster-goal.done { color: #1db954; font-weight: 600; }
+    /* N-28：海报固定深色（分享产物不随主题），但强调色跟随配色方案 */
+    .poster-goal.done { color: var(--accent); font-weight: 600; }
     .poster-cmp { display: flex; gap: 12px; border-top: 1px solid #282828; padding-top: 14px; }
     .pd-col { flex: 1; min-width: 0; }
     .pd-label { font-size: 11px; color: #6a6a6a; }
@@ -519,7 +564,10 @@
       font-family: inherit;
       transition: all .12s;
       line-height: 1.2;
+      position: relative;
     }
+    /* N-18：胶囊视觉紧凑（约 26px），命中区补到 44px */
+    .tag-opt::after { content: ''; position: absolute; inset: -9px -2px; }
     .tag-opt:hover { background: var(--tap); }
     .tag-opt.selected {
       background: var(--accent);
@@ -543,13 +591,18 @@
 
     /* ============== Toast ============== */
     .toast {
-      position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+      position: fixed; bottom: calc(24px + env(safe-area-inset-bottom)); /* N-20：避开 iPhone Home 指示条 */
+      left: 50%; transform: translateX(-50%);
       background: var(--text); color: var(--bg);
       padding: 10px 18px; border-radius: 999px;
       font-size: 13px; font-weight: 600;
       z-index: 200;
       box-shadow: var(--shadow-raised);
       animation: toastIn .2s;
+      /* N-20：长错误文案（如「保存失败：QuotaExceededError…」）不得横向溢出屏幕 */
+      max-width: calc(100vw - 32px);
+      text-align: center;
+      overflow-wrap: break-word;
     }
     @keyframes toastIn { from { transform: translateX(-50%) translateY(10px); opacity: 0; } to { transform: translateX(-50%) translateY(0); opacity: 1; } }
     @keyframes bounce { 0% { transform: scale(.3); opacity: 0; } 50% { transform: scale(1.15); } 100% { transform: scale(1); opacity: 1; } }

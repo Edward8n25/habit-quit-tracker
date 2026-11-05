@@ -872,6 +872,90 @@ const seedV5 = { [MAIN_K]: projV5, [BAK_K]: projV5 };
     h.indexOf('99%') >= 0 && h.indexOf('已达成') < 0]);
 }
 
+// ============ B 批（可访问性 / 视觉 / 工程）新增断言 ============
+// 14.1 N-37：分类名不得以 __ 开头（FILTER_NONE='__none__' 恰好 8 字符可被用户碰撞）
+{
+  const r = bootWith(seedV5);
+  const reserved = r.qt.isReservedCategoryName;
+  results.push(['B-1 N-37：__ 前缀被判为保留名',
+    reserved('__none__') === true && reserved('__x') === true
+    && reserved('饮食') === false && reserved('') === false]);
+  const add1 = r.qt.addCategory('__none__');
+  results.push(['B-1 N-37：新增分类拒绝保留名', add1.ok === false && add1.msg.indexOf('__') >= 0]);
+  const add2 = r.qt.addCategory('正常分类');
+  results.push(['B-1 N-37：正常分类仍可新增', add2.ok === true]);
+}
+// 14.2 N-37：sanitizeCategories 丢弃保留名（防导入数据复活哨兵碰撞）
+{
+  const r = bootWith(seedV5);
+  const out = r.qt.sanitizeCategories(['__none__', '饮食', '__x', '正常']);
+  results.push(['B-1 N-37：sanitize 丢弃保留名', out.join('|') === '饮食|正常']);
+}
+// 14.3 N-36：里程碑判定合并为单一实现，多个同时到达只弹最大的
+{
+  const r = bootWith({});
+  const proj = { seenMilestones: [] };
+  const picked = r.qt.markAndPickMilestone(proj, 10);
+  results.push(['B-1 N-36：多个里程碑同时到达只取最大的',
+    picked === 7 && proj.seenMilestones.join('|') === '1|3|7']);
+  const again = r.qt.markAndPickMilestone(proj, 10);
+  results.push(['B-1 N-36：已标记的阈值不重复触发', again === null]);
+}
+// 14.4 N-34：热力图有 5 年上界（异常早时间戳不得生成 2 万格）
+{
+  const r = bootWith({});
+  const D2 = 86400000;
+  const p = { startTs: 0, records: [{ id: 'old', t: 0 }] }; // 1970
+  const html = r.qt.renderYearHeatmap(p, new Date(), {}, 0);
+  const cols = (html.match(/class="hm-col"/g) || []).length;
+  results.push(['B-1 N-34：热力图最多 5 年（约 261 列）', cols > 0 && cols <= 262,
+    '实际 ' + cols + ' 列']);
+}
+// 14.5 N-28：海报色值从 token 读取（沙箱无 getComputedStyle 时回落默认绿）
+{
+  const r = bootWith({});
+  const c = r.qt.accentColor();
+  results.push(['B-2 N-28：accentColor 有兜底值', typeof c === 'string' && c.length > 0, c]);
+}
+// 14.6 N-18 / N-16 / N-26：CSS 层面的关键声明存在（静态检查，避免依赖浏览器）
+{
+  const fs2 = require('fs');
+  const html = fs2.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+  results.push(['B-1 N-16：存在 :focus-visible 焦点环', html.indexOf(':focus-visible') >= 0]);
+  results.push(['B-2 N-26：存在 color-scheme 声明', html.indexOf('color-scheme') >= 0]);
+  results.push(['B-2 N-25：head 内有预置 data-theme 的同步脚本',
+    /documentElement\.setAttribute\('data-theme'/.test(html) && html.indexOf('quit-tracker-theme') >= 0]);
+  const hasSafeArea = /\.toast[\s\S]{0,600}env\(safe-area-inset-bottom\)/.test(html);
+  const hasMaxWidth = html.indexOf('max-width: calc(100vw - 32px)') >= 0;
+  results.push(['B-1 N-20：toast 有 safe-area 与 max-width', hasSafeArea && hasMaxWidth]);
+  results.push(['B-1 N-19：输入框字号 ≥ 16px（iOS 不自动放大）',
+    /\.input, \.textarea[\s\S]{0,300}font-size: 16px/.test(html)]);
+}
+// 14.7 N-15：表单控件标签都有 for=（分组标题走 .field-label 不算）
+{
+  const src = fs.readFileSync(path.join(ROOT, 'src', 'app.js'), 'utf8');
+  const bareLabels = (src.match(/<label>/g) || []).length;
+  const forLabels = (src.match(/<label for=/g) || []).length;
+  results.push(['B-1 N-15：无未关联控件的 <label>', bareLabels === 0 && forLabels >= 14,
+    '裸 label=' + bareLabels + '，带 for=' + forLabels]);
+}
+// 14.8 N-23：touchmove 不再常驻非 passive
+{
+  const src = fs.readFileSync(path.join(ROOT, 'src', 'app.js'), 'utf8');
+  // 取 init() 的函数体（从 function init 到下一个顶层 function 之前），断言里面没有注册 touchmove
+  const initStart = src.indexOf('function init()');
+  const initEnd = src.indexOf('function installSeedData', initStart);
+  const initBody = initStart >= 0 && initEnd > initStart ? src.slice(initStart, initEnd) : '';
+  const inInit = initBody.indexOf("addEventListener('touchmove'") >= 0;
+  // dragStart 的函数体里必须有注册
+  const dsStart = src.indexOf('function dragStart');
+  const dsEnd = src.indexOf('function dragMove', dsStart);
+  const dsBody = dsStart >= 0 && dsEnd > dsStart ? src.slice(dsStart, dsEnd) : '';
+  const inDragStart = dsBody.indexOf("addEventListener('touchmove'") >= 0;
+  results.push(['B-3 N-23：touchmove 只在拖拽期间注册', !inInit && inDragStart,
+    'init=' + inInit + ' dragStart=' + inDragStart]);
+}
+
 // 输出
 let pass = 0;
 results.forEach(([name, ok]) => {

@@ -3,6 +3,8 @@ name: Deploy static content to Pages
 on:
   push:
     branches: ["main"]
+  pull_request:
+    branches: ["main"]
   workflow_dispatch:
 
 permissions:
@@ -15,7 +17,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # N-30：4 层测试必须先跑，失败则不部署。
+  # 原先 workflow 只做 checkout → upload → deploy，140 条断言全靠手动，任何回归都能直接上线。
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: 语法检查
+        run: node --check src/app.js
+      - name: 冒烟测试
+        run: node tests/smoke-test.js
+      - name: 弹窗交互测试
+        run: node tests/picker-interaction.js
+      - name: 样式守门
+        run: node tests/style-consistency.js
+      - name: SW 断言
+        run: node tests/assert-sw.js
+      - name: 静态资源校验
+        run: node scripts/check-assets.js
+
   deploy:
+    needs: test
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -25,10 +52,16 @@ jobs:
         uses: actions/checkout@v4
       - name: Setup Pages
         uses: actions/configure-pages@v5
+      # N-30：只发布运行产物，不把 tests/ / scripts/ / .dev 推到站点上
+      - name: 组装发布目录
+        run: |
+          mkdir -p _site
+          cp index.html sw.js manifest.json LICENSE _site/
+          cp -r src assets docs _site/
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: "."
+          path: "_site"
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4

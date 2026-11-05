@@ -26,6 +26,7 @@ function makeEl(tag) {
     style: {}, className: '', dataset: {},
     classList: { add() {}, remove() {}, toggle() {} },
     setAttribute() {}, getAttribute() { return null; },
+    removeAttribute() {},
     _handlers: {},
     addEventListener(type, fn) { this._handlers[type] = fn; },
     removeEventListener() {},

@@ -276,12 +276,17 @@ quit-tracker/
 │   │   └── screenshots/        ← README 引用的功能截图
 │
 ├── tests/
-│   ├── smoke-test.js        ← 冒烟测试（85 项断言，`node tests/smoke-test.js` 运行）
+│   ├── smoke-test.js        ← 冒烟测试（100 项断言，`node tests/smoke-test.js` 运行）
 │   ├── style-consistency.js ← 样式一致性守门（死 CSS / 失配类名 / Token 棘轮，可进 CI）
 │   ├── picker-interaction.js ← 弹窗交互测试（38 项，补 stub DOM 覆盖不到的弹窗内部逻辑）
 │   ├── assert-sw.js         ← Service Worker 防互删与版本一致性断言（4 项）
 │   ├── browser-picker.js    ← 真浏览器端到端（34 项，未检测到浏览器时自动跳过）
 │   └── fixture-picker.html  ← 上面那个测试的夹具页（带 `?run=1` 执行守卫）
+│
+├── scripts/
+│   ├── check-assets.js      ← 静态资源校验（8 项，SW 缓存清单 / manifest 图标 / 本地引用）
+│   ├── dev-server.ps1       ← 本地静态服务器
+│   └── gen-icons.ps1        ← 图标生成
 │
 ├── CHANGELOG.md
 ├── .gitignore
@@ -365,7 +370,11 @@ quit-tracker/
 - [x] **隐私项目被「+ 我又做了」绕过模糊**：模糊态拒绝打开记录弹窗
 - [x] **导入不校验时间与 id**：未来时间归一、重复 id 重生成
 - [x] **恢复默认分类 / 排序模式死锁 / `?demo=1` 首帧漏出 / 目标进度 100% 假达成**：各自修正
-- [x] 冒烟测试 64 → **85 项**，弹窗交互 28 → **38 项**，内联 style 棘轮 66 → **64**
+- [x] 冒烟测试 64 → **100 项**，弹窗交互 28 → **38 项**，新增静态资源校验 8 项，内联 style 棘轮 66 → **64**
+- [x] **CI 接入测试**：5 个脚本在部署前自动执行，失败不发布；发布产物收窄到运行所需文件
+- [x] **可访问性**：表单标签关联控件、键盘焦点环、弹窗焦点陷阱、触控目标 ≥44px、iOS 输入不放大、toast 读屏播报
+- [x] **视觉细节**：深色冷启动无白闪、原生控件跟随主题、海报强调色跟随配色、主题按钮图标随状态变化
+- [x] **工程**：分类保留名防护、热力图 5 年上界、图标 SVG 与里程碑判定去重、死参数清理
 
 ### 已完成（1.0.1 同源缓存互删防护，2026-10-25）
 
@@ -394,11 +403,13 @@ quit-tracker/
 - [ ] 拆 `app.js` 为 ES Modules（data / ui / views / calendar）
 - [ ] 抽 `shared/` 通用层（esc / toast / modalStack / formatDuration / loadState+migrate）
 
-> 🧪 **运行冒烟测试**：`node tests/smoke-test.js`（85 项断言，零依赖，覆盖双 key 冗余、**损坏恢复**、**损坏原文逃生口**、迁移管道（含 **v6→v7 六场景**）、渲染层、五功能区块、隐私 v4、月历口径、标签检索、v5 分类筛选 / 排序 / 海报、**v6 分类增删改**、**v7 起点独立与周期统计**）。
+> 🧪 **运行冒烟测试**：`node tests/smoke-test.js`（100 项断言，零依赖，覆盖双 key 冗余、**损坏恢复**、**损坏原文逃生口**、迁移管道（含 **v6→v7 六场景**）、渲染层、五功能区块、隐私 v4、月历口径、标签检索、v5 分类筛选 / 排序 / 海报、**v6 分类增删改**、**v7 起点独立与周期统计**）。
 > ↩️ **运行弹窗交互测试**：`node tests/picker-interaction.js`（38 项，覆盖弹窗挂载后的分类选择器新建 / 管理链路、**删除后弹窗栈归零**、**搜索分区渲染**、排序模式退出、隐私拦截）。
 > 🌐 **运行真浏览器端到端**：`node tests/browser-picker.js`（34 项，需要 Edge / Chrome；未检测到则跳过，可用 `EDGE_PATH` 指定）。
 > 🎨 **运行样式守门**：`node tests/style-consistency.js`（8 项检查，无死 CSS / 无失配类名 / Token 齐备 / 间距·圆角·内联 style 只许收紧的棘轮阈值）。
 > 🔌 **运行 SW 断言**：`node tests/assert-sw.js`（4 项，缓存前缀隔离、CACHE 名、注册调用、版本号与 CHANGELOG 一致）。
+> 📦 **运行静态资源校验**：`node scripts/check-assets.js`（8 项，SW 缓存清单与磁盘一致性、manifest 图标尺寸、本地引用与绝对路径、SW 注册调用）。
+> 🤖 以上 5 个脚本已在 CI 中自动执行（`.github/workflows/pages.yml` 的 test job），失败则不部署。
 > ⚠️ 标注 ⚠️ 的功能改动会涉及数据口径（影响“破戒次数 / 连胜”等所有统计），单独立项、改前先备份并跑冒烟测试。
 
 ---

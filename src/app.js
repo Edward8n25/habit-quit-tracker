@@ -344,6 +344,8 @@
     var out = [];
     (Array.isArray(list) ? list : []).forEach(function (c) {
       if (typeof c !== 'string') return;
+      // N-37：保留区名字（__ 开头）一律丢弃 —— 否则导入的旧数据可能复活哨兵碰撞
+      if (isReservedCategoryName(c.trim())) return;
       var name = c.trim().slice(0, MAX_CATEGORY_LEN);
       if (!name || out.indexOf(name) >= 0) return;
       if (out.length >= MAX_CATEGORIES) return;
@@ -443,6 +445,17 @@
     }
   }
   // 更新 Header 演示按钮视觉状态
+  // N-36：图标 SVG 抽成常量（原先眼睛 3 份、编辑 3 份，改一处要同步三处）
+  // EYE_*_PATHS 是 path 片段（给已有 <svg> 换 innerHTML 用）；SVG_EYE_* 是完整 svg（给新建元素用）
+  var EYE_OPEN_PATHS = '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>';
+  var EYE_CLOSED_PATHS = '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/>';
+  var SVG_ATTRS = 'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"';
+  var SVG_EYE_OPEN = '<svg ' + SVG_ATTRS + '>' + EYE_OPEN_PATHS + '</svg>';
+  var SVG_EYE_CLOSED = '<svg ' + SVG_ATTRS + '>' + EYE_CLOSED_PATHS + '</svg>';
+  var SVG_EDIT = '<svg ' + SVG_ATTRS + ' width="%SIZE%" height="%SIZE%"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>';
+  var SVG_TRASH = '<svg ' + SVG_ATTRS + ' width="%SIZE%" height="%SIZE%"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>';
+  function svgIcon(tpl, size) { return tpl.replace(/%SIZE%/g, String(size || 18)); }
+
   function updateDemoBtn(on) {
     var btn = document.getElementById('demo-btn');
     if (!btn) return;
@@ -450,9 +463,7 @@
     btn.setAttribute('aria-label', on ? '退出对外展示模式' : '对外展示模式');
     btn.title = on ? '对外展示模式已开启（点击退出）' : '对外展示模式：一键隐藏所有隐私项目';
     var icon = btn.querySelector('svg');
-    if (icon) icon.innerHTML = on
-      ? '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/>'
-      : '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>';
+    if (icon) icon.innerHTML = on ? EYE_CLOSED_PATHS : EYE_OPEN_PATHS;
   }
 
   // 计算从 latest record 到现在已经过去多久
@@ -782,11 +793,19 @@
     return state.projects.filter(function (p) { return p.category === name; }).length;
   }
 
+  // N-37：分类名不得以 __ 开头 —— FILTER_NONE = '__none__' 恰好 8 字符（= MAX_CATEGORY_LEN），
+  // 用户能建成同名分类，之后该分类的项目永远无法被筛选胶囊筛出（会被当成"未分类"）。
+  // 用前缀保留区（__）而不是只拦 '__none__'，避免将来新增其他哨兵值时再次碰撞。
+  function isReservedCategoryName(name) {
+    return typeof name === 'string' && name.indexOf('__') === 0;
+  }
+
   function addCategory(raw) {
     var raw2 = (typeof raw === 'string' ? raw : '').trim();
     if (!raw2) return { ok: false, msg: '请输入分类名' };
     // 超长一律拒绝而不是静默截断 —— 否则用户输入的名字会被悄悄改掉
     if (raw2.length > MAX_CATEGORY_LEN) return { ok: false, msg: '分类名最多 ' + MAX_CATEGORY_LEN + ' 个字' };
+    if (isReservedCategoryName(raw2)) return { ok: false, msg: '分类名不能以 __ 开头（保留给系统筛选值）' };
     var name = raw2;
     if (getCategories().indexOf(name) >= 0) return { ok: false, msg: '该分类已存在' };
     if (getCategories().length >= MAX_CATEGORIES) return { ok: false, msg: '分类最多 ' + MAX_CATEGORIES + ' 个' };
@@ -800,6 +819,7 @@
     var raw2 = (typeof rawNew === 'string' ? rawNew : '').trim();
     if (!raw2) return { ok: false, msg: '请输入分类名' };
     if (raw2.length > MAX_CATEGORY_LEN) return { ok: false, msg: '分类名最多 ' + MAX_CATEGORY_LEN + ' 个字' };
+    if (isReservedCategoryName(raw2)) return { ok: false, msg: '分类名不能以 __ 开头（保留给系统筛选值）' };
     var next = raw2;
     var idx = getCategories().indexOf(oldName);
     if (idx < 0) return { ok: false, msg: '原分类不存在' };
@@ -859,9 +879,9 @@
            + '</div>';
     }).join('');
     var html = ''
-      + '<div class="field"><label>现有分类（' + cats.length + ' / ' + MAX_CATEGORIES + '）</label>'
+      + '<div class="field"><div class="field-label">现有分类（' + cats.length + ' / ' + MAX_CATEGORIES + '）</div>'
       + '  <div class="cat-list">' + (rows || '<div class="cat-empty">还没有分类，添加一个试试</div>') + '</div></div>'
-      + '<div class="field"><label>新增分类</label>'
+      + '<div class="field"><label for="qt-cat-new">新增分类</label>'
       + '  <div class="row"><input class="input" id="qt-cat-new" maxlength="' + MAX_CATEGORY_LEN + '" placeholder="例如：宵夜 / 咖啡">'
       + '  <button class="btn primary cat-add" id="qt-cat-add">添加</button></div></div>'
       + '<div class="modal-actions">'
@@ -920,7 +940,7 @@
   function openRenameCategory(name, notify) {
     if (isDemoMode()) return;
     var html = ''
-      + '<div class="field"><label>分类名</label><input class="input" id="qt-cat-rename" maxlength="' + MAX_CATEGORY_LEN + '" value="' + esc(name) + '"></div>'
+      + '<div class="field"><label for="qt-cat-rename">分类名</label><input class="input" id="qt-cat-rename" maxlength="' + MAX_CATEGORY_LEN + '" value="' + esc(name) + '"></div>'
       + '<div class="modal-actions">'
       + '  <button class="btn ghost" onclick="window.__qt.closeModal()">取消</button>'
       + '  <button class="btn primary" id="qt-cat-rename-ok">保存</button>'
@@ -1004,24 +1024,13 @@
   }
 
   // 检查并弹里程碑弹窗（已庆祝过的不会重复弹）
+  // 创建项目后立即补弹（与 ticker 路径共用 markAndPickMilestone，见 N-36）
   function maybeShowMilestone(project, dur) {
     if (!project || !dur) return;
-    if (!Array.isArray(project.seenMilestones)) project.seenMilestones = [];
-    var days = dur.d;
-    var triggered = false;
-    MILESTONES.forEach(function (m) {
-      if (days >= m && project.seenMilestones.indexOf(m) === -1) {
-        project.seenMilestones.push(m);
-        triggered = true;
-        // 多个里程碑一起到：合并弹一个
-      }
-    });
+    var triggered = markAndPickMilestone(project, dur.d);
     if (triggered) {
       saveState();
-      // 找最大的那个庆祝
-      var max = 0;
-      project.seenMilestones.forEach(function (m) { if (m <= days && m > max) max = m; });
-      showMilestone(project, max);
+      showMilestone(project, triggered);
     }
   }
 
@@ -1123,9 +1132,10 @@
   }
 
   // 用 seenMilestones 数组避免重复弹，跨过即标记
-  function checkMilestoneTick(project, dur) {
+  // N-36：里程碑判定原本有两份（创建项目后补弹 / ticker 每秒检查），逻辑等价但写法不同。
+  // 合并为单一实现：标记所有新跨过的阈值，只弹最大的那个（多个同时到达不连弹）。
+  function markAndPickMilestone(project, days) {
     if (!Array.isArray(project.seenMilestones)) project.seenMilestones = [];
-    var days = dur.d;
     var triggered = null;
     MILESTONES.forEach(function (m) {
       if (days >= m && project.seenMilestones.indexOf(m) === -1) {
@@ -1133,6 +1143,11 @@
         if (!triggered || m > triggered) triggered = m;
       }
     });
+    return triggered; // null = 无新里程碑
+  }
+
+  function checkMilestoneTick(project, dur) {
+    var triggered = markAndPickMilestone(project, dur.d);
     if (triggered) {
       saveState();
       // 只在 App 处于前台时弹
@@ -1304,12 +1319,12 @@
            + (isPriv
                ? '<button class="pc-eye' + eyeCls + '" aria-label="' + (blurred ? '睁眼查看' : '闭眼隐藏') + '" title="' + (blurred ? '点击查看内容' : '点击隐藏内容') + '" onclick="event.stopPropagation();window.__qt.toggleEye(\'' + p.id + '\')">'
                +   (blurred
-               ?     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>'
-               :     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>')
+               ?     SVG_EYE_CLOSED
+               :     SVG_EYE_OPEN)
                + '</button>'
                : '')
            + '    <button class="icon-btn" aria-label="编辑" onclick="event.stopPropagation();window.__qt.openEditProject(\'' + p.id + '\')">'
-           + '      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>'
+           + '      ' + svgIcon(SVG_EDIT, 18) + ''
            + '    </button>'
            + '  </div>'
            + '  <div class="pc-time' + (blurred ? ' is-blurred' : '') + '" data-streak-ts="' + (function () { var ts = lastRelapseTs(p); return ts == null ? projectStartTs(p) : ts; })() + '">'
@@ -1383,6 +1398,9 @@
     dragFrom = idx;
     dragStartY = dragCurY = dragPoint(e).clientY;
     el.classList.add('dragging');
+    // N-23：只在拖拽期间注册非 passive 的 touchmove（需要 preventDefault 阻止滚动抢手势）。
+    // 常驻注册会让整个页面失去快速滚动路径。
+    document.addEventListener('touchmove', dragMove, { passive: false });
     if (e.cancelable) e.preventDefault(); // 关键：阻止滚动抢走手势
   }
 
@@ -1394,6 +1412,8 @@
   }
 
   function dragEnd() {
+    // N-23：拖拽结束移除临时注册的非 passive touchmove（无论本次是否真的开始拖拽都要清）
+    document.removeEventListener('touchmove', dragMove);
     if (!dragEl) return;
     var from = dragFrom, to = dragCards.length - 1, i;
     // 用各卡片中线判断落点
@@ -1433,12 +1453,12 @@
       + (isPriv
           ? '<button class="pc-eye' + eyeCls + '" aria-label="' + (blurred ? '睁眼查看' : '闭眼隐藏') + '" title="' + (blurred ? '点击查看内容' : '点击隐藏内容') + '" onclick="window.__qt.toggleEye(\'' + p.id + '\')">'
           +   (blurred
-          ?     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>'
-          :     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>')
+          ?     SVG_EYE_CLOSED
+          :     SVG_EYE_OPEN)
           + '</button>'
           : '')
       + '  <button class="icon-btn" onclick="window.__qt.openEditProject(\'' + p.id + '\')" aria-label="编辑">'
-      + '    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>'
+      + '    ' + svgIcon(SVG_EDIT, 18) + ''
       + '  </button>'
       + '</div>';
 
@@ -1612,10 +1632,10 @@
            + '  </div>'
            + (s ? '<div class="hi-streak">坚持<br><b style="color:var(--text);">' + s.compact + '</b></div>' : '')
            + '  <button class="hi-edit" onclick="window.__qt.openEditRecord(\'' + p.id + '\',\'' + r.id + '\')" aria-label="编辑" title="编辑">'
-           + '    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>'
+           + '    ' + svgIcon(SVG_EDIT, 16) + ''
            + '  </button>'
            + '  <button class="hi-del" onclick="window.__qt.confirmDeleteRecord(\'' + p.id + '\',\'' + r.id + '\')" aria-label="删除" title="删除">'
-           + '    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>'
+           + '    ' + svgIcon(SVG_TRASH, 16) + ''
            + '  </button>'
            + '</div>';
     });
@@ -1877,11 +1897,7 @@
     var now = new Date();
     var recordMap = buildRecordCountMap(p);
     var total = 0;
-    var max = 0;
-    Object.keys(recordMap).forEach(function (k) {
-      total += recordMap[k];
-      if (recordMap[k] > max) max = recordMap[k];
-    });
+    Object.keys(recordMap).forEach(function (k) { total += recordMap[k]; });
     var blurred = p.private && shouldBlur(p);
     var html = ''
       // Tab 切换
@@ -1890,14 +1906,14 @@
       + '  <button class="cal-tab' + (calView === 'year' ? ' active' : '') + '" data-view="year">年热力图</button>'
       + '</div>'
       + '<div class="calendar-wrap' + (blurred ? ' is-blurred' : '') + '">'
-      + (calView === 'month' ? renderMonth(p, now, recordMap)
-                              : renderYearHeatmap(p, now, recordMap, total, max))
+      + (calView === 'month' ? renderMonth(now, recordMap)
+                              : renderYearHeatmap(p, now, recordMap, total))
       + '</div>';
 
     return html;
   }
 
-  function renderMonth(p, now, recordMap) {
+  function renderMonth(now, recordMap) {
     var year = now.getFullYear();
     var month = now.getMonth() + calMonthOffset;
     while (month < 0) { month += 12; year--; }
@@ -1955,7 +1971,7 @@
   }
 
   // 年热力图：365 天，GitHub 贡献图风格
-  function renderYearHeatmap(p, now, recordMap, total, max) {
+  function renderYearHeatmap(p, now, recordMap, total) {
     var firstRecordTs = null;
     p.records.forEach(function (r) {
       var ts = recordTs(r);
@@ -1963,6 +1979,10 @@
     });
     var endTs = Date.now();
     var startTs = firstRecordTs != null ? firstRecordTs : (endTs - 364 * DAY_MS);
+    // N-34：年份上界。异常早的时间戳（手动填 1970 / 导入脏数据）会让这里生成约 2 万格 DOM，
+    // 首帧明显卡顿。限制最多回溯 5 年（约 260 列），足以覆盖任何真实使用场景。
+    var MAX_HEATMAP_DAYS = 365 * 5;
+    if (endTs - startTs > MAX_HEATMAP_DAYS * DAY_MS) startTs = endTs - MAX_HEATMAP_DAYS * DAY_MS;
     var startDate = new Date(startTs);
     startDate.setHours(0, 0, 0, 0);
     // 对齐到周日
@@ -2047,6 +2067,30 @@
   // modalClass 用于覆盖默认 modal 样式（如 milestone-modal）。
   // 防误关（用户要求）：单击遮罩不关闭弹窗——正在输入的内容不会因误触丢失；
   // 关闭途径只有「取消 / 确定 / 关闭」按钮与 ESC，因此每个弹窗必须自带关闭入口
+  // N-17：焦点陷阱 —— Tab / Shift+Tab 在弹窗内循环，不得走到背景内容。
+  // 背景内容被 aria-hidden 屏蔽（读屏也不会读到），关闭时恢复。
+  var FOCUSABLE_SEL = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), '
+                   + 'textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+  function trapFocus(e) {
+    if (e.key !== 'Tab' || !modalStack.length) return;
+    var top = modalStack[modalStack.length - 1];
+    var nodes = Array.prototype.slice.call(top.querySelectorAll(FOCUSABLE_SEL))
+      .filter(function (el) { return el.offsetParent !== null || el === document.activeElement; });
+    if (!nodes.length) return;
+    var first = nodes[0];
+    var last = nodes[nodes.length - 1];
+    if (e.shiftKey) {
+      if (document.activeElement === first || !top.contains(document.activeElement)) {
+        e.preventDefault(); last.focus();
+      }
+    } else {
+      if (document.activeElement === last || !top.contains(document.activeElement)) {
+        e.preventDefault(); first.focus();
+      }
+    }
+  }
+
   function pushModalBack(html, onMount, modalClass) {
     var back = document.createElement('div');
     back.className = 'modal-back';
@@ -2059,6 +2103,11 @@
     document.body.appendChild(back);
     document.body.style.overflow = 'hidden'; // 锁定背景滚动，防遮罩穿透
     modalStack.push(back);
+    // N-17：栈深 1 时把背景主内容标记为 aria-hidden（读屏不再穿透读背景）
+    if (modalStack.length === 1 && main) {
+      main.setAttribute('aria-hidden', 'true');
+      main._qtAriaHidden = true;
+    }
     if (onMount) onMount(back);
     return back;
   }
@@ -2091,6 +2140,11 @@
     }
     if (modalStack.length === 0) {
       document.body.style.overflow = '';
+      // N-17：栈清空时恢复背景可访问性
+      if (main && main._qtAriaHidden) {
+        main.removeAttribute('aria-hidden');
+        main._qtAriaHidden = false;
+      }
       // 用户弹窗全部关闭后，按序补弹此前被延后的自动弹窗（延迟一帧，避免同一轮事件内重建 DOM）
       if (pendingAutoModals.length) {
         var fn = pendingAutoModals.shift();
@@ -2103,12 +2157,12 @@
   function openNewProject() {
     closeModal(); // 排他性弹窗：先关已有弹窗（确认类弹窗才会叠加）
     var html = ''
-      + '<div class="field"><label>项目名称</label><input class="input" id="qt-name" placeholder="例如：戒奶茶" maxlength="20"></div>'
-      + '<div class="field"><label>开始戒断时间</label><input class="input" type="datetime-local" id="qt-start" value="' + inputDateTimeValue(Date.now()) + '"><div style="font-size:12px;color:var(--text-mute);margin-top:6px;">从此刻开始计时。可以改成更早的时间（回溯记录）。</div></div>'
-      + '<div class="field"><label>目标坚持天数（可选）</label><input class="input" type="number" id="qt-goal" min="0" max="3650" placeholder="例如：30 天，留空则不限目标"><div style="font-size:12px;color:var(--text-mute);margin-top:6px;">设定目标后详情页会显示进度条。</div></div>'
-      + '<div class="field"><label>分类（可选）</label><div class="tag-picker" id="qt-cat"></div></div>'
-      + '<div class="field"><label>隐私项目</label><label class="privacy-toggle"><input type="checkbox" id="qt-private"> <span>设为隐私项目（对外展示时内容模糊，需点 👁 查看）</span></label></div>'
-      + '<div class="field"><label>选择图标</label><div class="emoji-picker" id="qt-emoji"></div></div>'
+      + '<div class="field"><label for="qt-name">项目名称</label><input class="input" id="qt-name" placeholder="例如：戒奶茶" maxlength="20"></div>'
+      + '<div class="field"><label for="qt-start">开始戒断时间</label><input class="input" type="datetime-local" id="qt-start" value="' + inputDateTimeValue(Date.now()) + '"><div style="font-size:12px;color:var(--text-mute);margin-top:6px;">从此刻开始计时。可以改成更早的时间（回溯记录）。</div></div>'
+      + '<div class="field"><label for="qt-goal">目标坚持天数（可选）</label><input class="input" type="number" id="qt-goal" min="0" max="3650" placeholder="例如：30 天，留空则不限目标"><div style="font-size:12px;color:var(--text-mute);margin-top:6px;">设定目标后详情页会显示进度条。</div></div>'
+      + '<div class="field"><div class="field-label">分类（可选）</div><div class="tag-picker" id="qt-cat"></div></div>'
+      + '<div class="field"><label class="privacy-toggle"><input type="checkbox" id="qt-private"> <span>设为隐私项目（对外展示时内容模糊，需点 👁 查看）</span></label></div>'
+      + '<div class="field"><div class="field-label">选择图标</div><div class="emoji-picker" id="qt-emoji"></div></div>'
       + '<div class="modal-actions">'
       + '  <button class="btn ghost" onclick="window.__qt.closeModal()">取消</button>'
       + '  <button class="btn primary" id="qt-save-btn">创建</button>'
@@ -2160,12 +2214,12 @@
     closeModal(); // 排他性弹窗
     var startTs = projectStartTs(p);
     var html = ''
-      + '<div class="field"><label>项目名称</label><input class="input" id="qt-name" value="' + esc(p.name) + '" maxlength="20"></div>'
-      + '<div class="field"><label>开始时间</label><input class="input" type="datetime-local" id="qt-start" value="' + (startTs != null ? inputDateTimeValue(startTs) : '') + '"></div>'
-      + '<div class="field"><label>目标坚持天数（可选，0 = 不限）</label><input class="input" type="number" id="qt-goal" min="0" max="3650" value="' + (p.goalDays || 0) + '"></div>'
-      + '<div class="field"><label>分类</label><div class="tag-picker" id="qt-cat"></div></div>'
-      + '<div class="field"><label>隐私项目</label><label class="privacy-toggle"><input type="checkbox" id="qt-private"' + (p.private ? ' checked' : '') + '> <span>设为隐私项目（对外展示时内容模糊，需点 👁 查看）</span></label></div>'
-      + '<div class="field"><label>图标</label><div class="emoji-picker" id="qt-emoji"></div></div>'
+      + '<div class="field"><label for="qt-name">项目名称</label><input class="input" id="qt-name" value="' + esc(p.name) + '" maxlength="20"></div>'
+      + '<div class="field"><label for="qt-start">开始时间</label><input class="input" type="datetime-local" id="qt-start" value="' + (startTs != null ? inputDateTimeValue(startTs) : '') + '"></div>'
+      + '<div class="field"><label for="qt-goal">目标坚持天数（可选，0 = 不限）</label><input class="input" type="number" id="qt-goal" min="0" max="3650" value="' + (p.goalDays || 0) + '"></div>'
+      + '<div class="field"><div class="field-label">分类</div><div class="tag-picker" id="qt-cat"></div></div>'
+      + '<div class="field"><label class="privacy-toggle"><input type="checkbox" id="qt-private"' + (p.private ? ' checked' : '') + '> <span>设为隐私项目（对外展示时内容模糊，需点 👁 查看）</span></label></div>'
+      + '<div class="field"><div class="field-label">图标</div><div class="emoji-picker" id="qt-emoji"></div></div>'
       + '<div class="modal-actions">'
       + '  <button class="btn danger" onclick="window.__qt.confirmDeleteProject(\'' + p.id + '\')">删除</button>'
       + '  <button class="btn ghost" onclick="window.__qt.closeModal()">取消</button>'
@@ -2230,9 +2284,9 @@
           ? '  当前已坚持 <b style="color:var(--accent)">' + formatDuration(currentStreak(p)).short + '</b>，这次又会重置计时器。'
           : '  这是你的第一次记录。')
       + '</div>'
-      + '<div class="field"><label>发生时间</label><input class="input" type="datetime-local" id="qt-time" value="' + inputDateTimeValue(now) + '"></div>'
-      + '<div class="field"><label>原因（可选，可多选）</label><div class="tag-picker" id="qt-tags"></div></div>'
-      + '<div class="field"><label>备注（可选）</label><textarea class="textarea" id="qt-note" placeholder="比如：朋友聚会 / 心情不好…" maxlength="200"></textarea></div>'
+      + '<div class="field"><label for="qt-time">发生时间</label><input class="input" type="datetime-local" id="qt-time" value="' + inputDateTimeValue(now) + '"></div>'
+      + '<div class="field"><div class="field-label">原因（可选，可多选）</div><div class="tag-picker" id="qt-tags"></div></div>'
+      + '<div class="field"><label for="qt-note">备注（可选）</label><textarea class="textarea" id="qt-note" placeholder="比如：朋友聚会 / 心情不好…" maxlength="200"></textarea></div>'
       + '<div class="modal-actions">'
       + '  <button class="btn ghost" onclick="window.__qt.closeModal()">取消</button>'
       + '  <button class="btn primary" id="qt-save-btn">确认记录</button>'
@@ -2325,9 +2379,9 @@
     var rTs = recordTs(r);
     var rNote = recordNote(r);
     var html = ''
-      + '<div class="field"><label>发生时间</label><input class="input" type="datetime-local" id="qt-time" value="' + inputDateTimeValue(rTs) + '"></div>'
-      + '<div class="field"><label>原因（可选，可多选）</label><div class="tag-picker" id="qt-tags"></div></div>'
-      + '<div class="field"><label>备注</label><textarea class="textarea" id="qt-note" maxlength="200">' + esc(rNote) + '</textarea></div>'
+      + '<div class="field"><label for="qt-time">发生时间</label><input class="input" type="datetime-local" id="qt-time" value="' + inputDateTimeValue(rTs) + '"></div>'
+      + '<div class="field"><div class="field-label">原因（可选，可多选）</div><div class="tag-picker" id="qt-tags"></div></div>'
+      + '<div class="field"><label for="qt-note">备注</label><textarea class="textarea" id="qt-note" maxlength="200">' + esc(rNote) + '</textarea></div>'
       + '<div class="modal-actions">'
       + '  <button class="btn danger" onclick="window.__qt.confirmDeleteRecord(\'' + pid + '\',\'' + rid + '\')">删除</button>'
       + '  <button class="btn ghost" onclick="window.__qt.closeModal()">取消</button>'
@@ -2364,17 +2418,17 @@
       return '<option value="' + c + '"' + sel + '>' + c + ' 天</option>';
     }).join('');
     return ''
-      + '<div class="field"><label>复盘周期</label>'
+      + '<div class="field"><label for="qt-cycle">复盘周期</label>'
       + '  <select class="input" id="qt-cycle">' + cycleOptions + '</select>'
       + '  <div style="font-size:12px;color:var(--text-mute);margin-top:6px;">选择这次复盘对应的周期</div>'
       + '</div>'
-      + '<div class="field"><label>✨ 成就</label>'
+      + '<div class="field"><label for="qt-ach">✨ 成就</label>'
       + '  <textarea class="textarea" id="qt-ach" maxlength="500" placeholder="这周期你做到了什么？比如：连续 7 天没破戒，比上一次更稳">'
       + esc(prefill.achievement || '') + '</textarea></div>'
-      + '<div class="field"><label>🔧 不足 & 改进</label>'
+      + '<div class="field"><label for="qt-imp">🔧 不足 & 改进</label>'
       + '  <textarea class="textarea" id="qt-imp" maxlength="500" placeholder="哪里做得不够好？下次怎么改？">'
       + esc(prefill.improvement || '') + '</textarea></div>'
-      + '<div class="field"><label>🎯 下一步计划</label>'
+      + '<div class="field"><label for="qt-next">🎯 下一步计划</label>'
       + '  <textarea class="textarea" id="qt-next" maxlength="500" placeholder="下一个周期的具体目标是什么？">'
       + esc(prefill.nextPlan || '') + '</textarea></div>'
       + '<div class="modal-actions">'
@@ -2446,7 +2500,7 @@
     var r = p.reviews.find(function (x) { return x.id === rid; });
     if (!r) return;
     var html = ''
-      + '<div class="field"><label>复盘日期</label><div style="padding:11px 14px; background:var(--bg-input); border-radius:8px; font-size:14px;">'
+      + '<div class="field"><div class="field-label">复盘日期</div><div style="padding:11px 14px; background:var(--bg-input); border-radius:8px; font-size:14px;">'
       + esc(formatDateTime(r.ts)) + '</div></div>'
       + reviewFormHtml({
           cycleDays: r.cycleDays,
@@ -2535,6 +2589,16 @@
   }
 
   // 海报数据（纯计算，便于测试）。nowTs 可注入，测试时无需依赖真实时间
+  // N-28：海报色值从 CSS token 读取，跟随当前配色方案（原写死 #1db954，切到海盐蓝后海报仍是绿）
+  // 兜底：getComputedStyle 不可用（测试沙箱 / 极端环境）时回落到默认绿
+  function accentColor() {
+    try {
+      var v = window.getComputedStyle(document.documentElement).getPropertyValue('--accent');
+      if (v && v.trim()) return v.trim();
+    } catch (e) {}
+    return '#1db954';
+  }
+
   function posterData(p, rangeDays, nowTs) {
     var now = typeof nowTs === 'number' ? nowTs : Date.now();
     var day = DAY_MS;
@@ -2607,7 +2671,7 @@
       + '    <svg class="poster-ring" viewBox="0 0 200 200" aria-hidden="true">'
       + '      <circle cx="100" cy="100" r="88" fill="none" stroke="#282828" stroke-width="14"></circle>'
       + (d.pct > 0
-          ? '      <circle cx="100" cy="100" r="88" fill="none" stroke="#1db954" stroke-width="14"'
+          ? '      <circle cx="100" cy="100" r="88" fill="none" stroke="' + accentColor() + '" stroke-width="14"'
             + ' stroke-linecap="round" stroke-dasharray="' + C.toFixed(1) + '" stroke-dashoffset="' + offset + '"'
             + ' transform="rotate(-90 100 100)"></circle>'
           : '')
@@ -2664,13 +2728,13 @@
     x.strokeStyle = '#282828'; x.lineWidth = lw; x.stroke();
     if (d.pct > 0) {
       x.beginPath(); x.arc(cx, cy, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * d.pct);
-      x.strokeStyle = '#1db954'; x.stroke();
+      x.strokeStyle = accentColor(); x.stroke();
     }
     x.textAlign = 'center';
     x.fillStyle = '#ffffff'; x.font = 'bold 160px ' + CN;
     x.fillText(String(d.days), cx, cy + 40);
     x.fillStyle = '#b3b3b3'; x.font = '500 32px ' + CN; x.fillText('天', cx, cy + 94);
-    x.fillStyle = d.goalDone ? '#1db954' : '#b3b3b3'; x.font = '500 30px ' + CN;
+    x.fillStyle = d.goalDone ? accentColor() : '#b3b3b3'; x.font = '500 30px ' + CN;
     x.fillText(d.ringLabel, cx, cy + r + 74);
 
     x.strokeStyle = '#282828'; x.lineWidth = 2;
@@ -2727,7 +2791,7 @@
 
     var html = ''
       + '<div class="field">'
-      + '  <label>报告周期</label>'
+      + '  <div class="field-label">报告周期</div>'
       + '  <div class="row" style="gap: 8px;">'
       + '    <button class="btn" id="qt-rpt-week" style="flex:1; justify-content:center;">近 7 天</button>'
       + '    <button class="btn" id="qt-rpt-month" style="flex:1; justify-content:center;">近 30 天</button>'
@@ -2803,7 +2867,7 @@
     closeModal(); // 排他性弹窗（导入方式确认弹窗会叠加在其上）
     var html = ''
       + '<div class="field">'
-      + '  <label>主题</label>'
+      + '  <div class="field-label">主题</div>'
       + '  <div class="row" style="gap: 8px;">'
       + '    <button class="btn" id="qt-theme-light" style="flex:1; justify-content:center;">浅色</button>'
       + '    <button class="btn" id="qt-theme-dark" style="flex:1; justify-content:center;">深色</button>'
@@ -2811,7 +2875,7 @@
       + '  </div>'
       + '</div>'
       + '<div class="field">'
-      + '  <label>配色</label>'
+      + '  <div class="field-label">配色</div>'
       + '  <div class="accent-row">'
       + '    <button class="btn" id="qt-accent-green"><span class="accent-dot dot-green"></span>Spotify 绿</button>'
       + '    <button class="btn" id="qt-accent-ocean"><span class="accent-dot dot-ocean"></span>海盐蓝</button>'
@@ -2821,12 +2885,12 @@
       + '</div>'
       + '<div class="divider"></div>'
       + '<div class="field">'
-      + '  <label>项目分类</label>'
+      + '  <div class="field-label">项目分类</div>'
       + '  <button class="btn block" id="qt-cat-manage">分类管理（新增 / 重命名 / 删除）</button>'
       + '</div>'
       + '<div class="divider"></div>'
       + '<div class="field">'
-      + '  <label>数据管理</label>'
+      + '  <div class="field-label">数据管理</div>'
       + '  <div style="display: grid; gap: 8px;">'
       + '    <button class="btn block" id="qt-export">导出 JSON 备份</button>'
       + '    <button class="btn block" id="qt-import">导入备份</button>'
@@ -3023,6 +3087,17 @@
     try { accent = localStorage.getItem(ACCENT_KEY) || 'green'; } catch (e) {}
     if (ACCENT_LIST.indexOf(accent) < 0) accent = 'green';
     document.documentElement.setAttribute('data-accent', accent);
+    // N-29：主题按钮图标反映"点一下会切到什么"，原先 #theme-icon 从未被引用，图标恒为月亮
+    var icon = document.getElementById('theme-icon');
+    var btn = document.getElementById('theme-btn');
+    if (icon) {
+      icon.innerHTML = dark
+        // 当前深色 → 点一下变浅色：显示太阳
+        ? '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>'
+        // 当前浅色 → 点一下变深色：显示月亮
+        : '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>';
+    }
+    if (btn) btn.setAttribute('aria-label', dark ? '切换到浅色主题' : '切换到深色主题');
   }
 
   // ---------- Toast ----------
@@ -3032,6 +3107,9 @@
     Array.prototype.forEach.call(document.querySelectorAll('.toast'), function (el) { el.remove(); });
     var t = document.createElement('div');
     t.className = 'toast';
+    // N-20：role=status + aria-live=polite 让读屏软件播报提示；否则 toast 对读屏完全不可见
+    t.setAttribute('role', 'status');
+    t.setAttribute('aria-live', 'polite');
     t.textContent = msg;
     document.body.appendChild(t);
     if (toastTimer) clearTimeout(toastTimer);
@@ -3090,13 +3168,15 @@
     });
     document.getElementById('settings-btn').addEventListener('click', openSettings);
 
-    // ESC 关闭最上层弹窗（配合弹窗栈）
+    // ESC 关闭最上层弹窗（配合弹窗栈）；Tab 在弹窗内循环（N-17 焦点陷阱）
     document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape') closeModal();
+      if (e.key === 'Escape') { closeModal(); return; }
+      trapFocus(e);
     });
 
     // 拖拽排序：移动/抬起挂 document，只注册一次（排序模式下由 .drag-handle 触发 dragStart，避免每次渲染重复绑定）
-    document.addEventListener('touchmove', dragMove, { passive: false });
+    // N-23：touchmove 不再常驻非 passive —— 常驻的 passive:false 会让浏览器无法走快速滚动路径，
+    // 移动端滚动性能受损。改为拖拽开始时临时注册、结束时移除（见 dragStart / dragEnd）。
     document.addEventListener('touchend', dragEnd);
     document.addEventListener('touchcancel', dragEnd);
     document.addEventListener('mousemove', dragMove);
@@ -3229,6 +3309,11 @@
       calPrev: calPrev,
       calNext: calNext,
       calTab: calTab,
+      // B 批测试钩子：分类保留名 / 里程碑合并实现 / 热力图上界 / accent 读取
+      isReservedCategoryName: isReservedCategoryName,
+      markAndPickMilestone: markAndPickMilestone,
+      renderYearHeatmap: renderYearHeatmap,
+      accentColor: accentColor,
       setDetailTab: function (v) { detailTab = v; render(); }, // 测试钩子：详情页页签切换
       confirmDeleteProject: confirmDeleteProject,
       confirmDeleteRecord: confirmDeleteRecord,
