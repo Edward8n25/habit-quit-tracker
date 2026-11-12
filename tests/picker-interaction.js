@@ -30,7 +30,12 @@ function makeEl(tag) {
     _handlers: {},
     addEventListener(type, fn) { this._handlers[type] = fn; },
     removeEventListener() {},
-    appendChild() {}, remove() {}, focus() {}, click() {},
+    // R3-15：记录子节点 —— 选择器只读 chip 的断言需要读取 appendChild 进来的元素
+    appendChild(child) { (this._children = this._children || []).push(child); },
+    remove() {},
+    // R3-14：focus 置标记 —— 焦点抢回断言需要观察 focus() 是否被调用
+    focus() { this._focused = true; },
+    click() {},
     querySelector(sel) { return proxy(sel); },
     querySelectorAll() { return []; }
   };
@@ -52,6 +57,12 @@ function fire(sel, type, ev) {
   el._handlers[type](ev || {});
   return true;
 }
+// 触发 document 级事件（R3-06：ESC 脏表单守卫挂在 document keydown 上）
+function fireDoc(doc, type, ev) {
+  const hs = doc._docHandlers[type] || [];
+  hs.forEach(fn => fn(ev || {}));
+  return hs.length > 0;
+}
 // FileReader 桩：同步回调 onload（批次 2 导入链路测试用）
 function FileReaderStub() { this.onload = null; }
 FileReaderStub.prototype.readAsText = function (file) {
@@ -72,7 +83,10 @@ function boot(seedObj, opts) {
     querySelector: (s) => proxy(s),
     querySelectorAll: () => [],
     createElement: makeEl,
-    addEventListener() {},
+    // R3-06：记录 document 级监听器（ESC 脏表单守卫挂 document keydown），供 fireDoc 驱动；
+    // 原先的空实现使这两个链路不可测
+    _docHandlers: {},
+    addEventListener(type, fn) { (this._docHandlers[type] = this._docHandlers[type] || []).push(fn); },
     activeElement: null
   };
   const ls = {
@@ -99,7 +113,7 @@ function boot(seedObj, opts) {
   vm.createContext(sb);
   let err = null;
   try { vm.runInContext(code, sb); } catch (e) { err = e; }
-  return { qt: win.__qt, store, main, err, win };
+  return { qt: win.__qt, store, main, err, win, doc };
 }
 
 const SEED = JSON.stringify({
@@ -375,7 +389,7 @@ function importBackup(r, content, mode) {
     before === 1 && stacked === 2 && ok && after === 0,
     'before=' + before + ' stacked=' + stacked + ' after=' + after]);
 }
-// 15.4 N-02：删除复盘后弹窗栈同样归零
+// 15.4 N-02 / F2：复盘编辑改为独立视图 —— 视图内删除经确认后归零并回列表
 {
   const v7 = JSON.stringify({ v: 7, categories: ['饮食'], projects: [{
     id: 'n3', name: '幽灵复盘', emoji: '🧋', category: '', order: 0,
@@ -387,13 +401,14 @@ function importBackup(r, content, mode) {
   r.qt.addReview('n3', 3, '成就', '不足', '计划');
   const st = JSON.parse(r.store['quit-tracker-v1']);
   const rid = st.projects[0].reviews[0].id;
-  r.qt.openEditReview('n3', rid);         // 栈深 1
-  r.qt.confirmDeleteReview('n3', rid);    // 栈深 2
+  r.qt.openEditReview('n3', rid);         // F2：进入独立视图（非弹窗）
+  const inView = r.main.innerHTML.indexOf('review-view') >= 0 && r.qt.modalDepth() === 0;
+  clickOn('#qt-review-del');              // 视图内删除 → 确认弹窗
   const stacked = r.qt.modalDepth();
   const ok = clickOn('#qt-confirm');
-  results.push(['A-3 N-02：编辑复盘内删除后弹窗栈归零',
-    stacked === 2 && ok && r.qt.modalDepth() === 0,
-    'stacked=' + stacked + ' after=' + r.qt.modalDepth()]);
+  results.push(['F2：复盘编辑为独立视图，删除经确认后归零',
+    inView && stacked === 1 && ok && r.qt.modalDepth() === 0,
+    'inView=' + inView + ' stacked=' + stacked + ' after=' + r.qt.modalDepth()]);
 }
 // 15.5 A14：排序模式在只剩 1 个项目时仍可退出，且退出后恢复原筛选
 {
@@ -461,6 +476,86 @@ function importBackup(r, content, mode) {
   results.push(['A-3 A13：恢复默认分类先弹确认（未直接执行）',
     depthAfter === depthBefore + 1 && cats.join('|') === '饮食|烟酒',
     'depth ' + depthBefore + '→' + depthAfter + ' cats=' + cats.join('|')]);
+}
+
+// ============ 第 3 轮复审修复（R3-*）新增断言 ============
+// 16.1 R3-06：ESC 脏表单守卫 —— 干净表单直接关；有未保存输入先确认
+const ESC7 = JSON.stringify({ v: 7, categories: ['饮食'], projects: [{
+  id: 'esc1', name: '脏表单夹具', emoji: '🧋', category: '饮食', order: 0,
+  startTs: Date.now() - 5 * 86400000,
+  records: [{ id: 'esc1r', t: Date.now() - 2 * 86400000, n: '', tags: [] }],
+  reviews: [], bestStreak: 0, goalDays: 0, private: false, eyeOpen: false,
+  seenMilestones: [], seenReviewCycles: [], dismissedReviewBanner: null, createdAt: Date.now() - 5 * 86400000
+}] });
+{
+  const r = boot({ 'quit-tracker-v1': ESC7, 'quit-tracker-v1.bak': ESC7 });
+  r.qt.openEditRecord('esc1', 'esc1r');
+  const fired = fireDoc(r.doc, 'keydown', { key: 'Escape' });
+  results.push(['R3-06：ESC 在干净表单上直接关闭',
+    fired && r.qt.modalDepth() === 0, 'depth=' + r.qt.modalDepth()]);
+}
+{
+  const r = boot({ 'quit-tracker-v1': ESC7, 'quit-tracker-v1.bak': ESC7 });
+  r.qt.openEditRecord('esc1', 'esc1r');
+  // 模拟"用户改过字段"：字段对比逻辑（trackFormDirty）在真 DOM 上工作，
+  // 桩 DOM 的 querySelectorAll 返回空，这里直接挂 isDirty 模拟脏态
+  r.qt._topModal()._qtIsDirty = () => true;
+  fireDoc(r.doc, 'keydown', { key: 'Escape' });
+  results.push(['R3-06：脏表单 ESC → 先弹确认（栈深 2，含放弃/继续按钮）',
+    r.qt.modalDepth() === 2 && !!proxies.get('#qt-discard-ok')]);
+  clickOn('#qt-discard-cancel');
+  results.push(['R3-06：继续编辑 → 只关确认弹窗，表单保留（栈深 1）',
+    r.qt.modalDepth() === 1]);
+  fireDoc(r.doc, 'keydown', { key: 'Escape' });
+  const ok = clickOn('#qt-discard-ok');
+  results.push(['R3-06：放弃修改 → 整栈归零', ok && r.qt.modalDepth() === 0,
+    'after=' + r.qt.modalDepth()]);
+}
+// 16.2 R3-14：带搜索词的 render 不得把焦点抢回搜索框
+{
+  const r = boot({ 'quit-tracker-v1': ESC7, 'quit-tracker-v1.bak': ESC7 });
+  r.qt.openDetail('esc1');
+  r.qt.setDetailTab('records');          // 首次渲染搜索框（detailSearch 为空）
+  r.qt.setDetailSearch('奶茶');
+  r.qt.setDetailTab('overview');
+  r.qt.setDetailTab('records');          // 带词切回 → 修复后不抢焦点
+  results.push(['R3-14：切页签带搜索词不再抢焦点',
+    !(proxies.get('#qt-search') || {})._focused]);
+  r.qt.calPrev();                        // 记录页翻月同样不抢
+  results.push(['R3-14：翻月后焦点不被拽回搜索框',
+    !(proxies.get('#qt-search') || {})._focused]);
+}
+// 16.3 R3-15：预置外原因标签渲染为只读 chip（保存时原样保留）
+{
+  const TG7 = JSON.stringify({ v: 7, categories: ['饮食'], projects: [{
+    id: 'tg1', name: '标签夹具', emoji: '🧋', category: '饮食', order: 0,
+    startTs: Date.now() - 5 * 86400000,
+    records: [{ id: 'tg1r', t: Date.now() - 2 * 86400000, n: '', tags: ['工作压力', '自定义原因'] }],
+    reviews: [], bestStreak: 0, goalDays: 0, private: false, eyeOpen: false,
+    seenMilestones: [], seenReviewCycles: [], dismissedReviewBanner: null, createdAt: Date.now() - 5 * 86400000
+  }] });
+  const r = boot({ 'quit-tracker-v1': TG7, 'quit-tracker-v1.bak': TG7 });
+  r.qt.openEditRecord('tg1', 'tg1r');
+  const kids = (proxies.get('#qt-tags') || {})._children || [];
+  const statics = kids.filter(el => /(^| )tag-opt static( |$)/.test(el.className || ''));
+  const preset = kids.filter(el => el.className === 'tag-opt selected');
+  results.push(['R3-15：预置外标签渲染为只读 chip',
+    statics.length === 1 && statics[0].textContent === '自定义原因',
+    'statics=' + statics.map(s => s.textContent).join(',')]);
+  results.push(['R3-15：预置内已选标签仍为可点按钮（工作压力）',
+    preset.some(el => el.textContent === '工作压力')]);
+}
+
+// 16.4 F2：复盘视图返回带脏内容 → 先确认，放弃后回复盘列表
+{
+  const r = boot({ 'quit-tracker-v1': ESC7, 'quit-tracker-v1.bak': ESC7 });
+  r.qt.openNewReview('esc1');
+  proxy('#qt-ach').value = '临时输入';
+  clickOn('[data-review-back]');
+  const confirmShown = r.qt.modalDepth() === 1 && !!proxies.get('#qt-review-discard');
+  clickOn('#qt-review-discard');
+  results.push(['F2：复盘视图返回带脏内容 → 先确认，放弃后回复盘列表',
+    confirmShown && r.qt.modalDepth() === 0 && r.main.innerHTML.indexOf('review-view') < 0]);
 }
 
 // ---------- 输出 ----------

@@ -16,7 +16,7 @@
   var ACCENT_LIST = ['green', 'ocean', 'teal', 'sunset'];
   var DEMO_KEY = 'quit-tracker-demo'; // 对外展示模式（全局开关，持久化：跨刷新保持隐藏，防演示时误刷新泄露）
   var SCHEMA_VERSION = 7; // v7: records 只存破戒，项目起点独立为 startTs（不再借 records[0] 当起点）
-  var APP_VERSION = '1.1.0'; // 产品版本（口径：1.0.0 前均为开发期 0.x；与 CHANGELOG 对应，与 schema 版本相互独立）
+  var APP_VERSION = '1.2.0'; // 产品版本（口径：1.0.0 前均为开发期 0.x；与 CHANGELOG 对应，与 schema 版本相互独立）
 
   // 通用常量（集中定义，避免魔法数字散落）
   var DAY_MS = 86400000;
@@ -461,7 +461,8 @@
     if (!btn) return;
     btn.classList.toggle('on', on);
     btn.setAttribute('aria-label', on ? '退出对外展示模式' : '对外展示模式');
-    btn.title = on ? '对外展示模式已开启（点击退出）' : '对外展示模式：一键隐藏所有隐私项目';
+    // F14：统一自定义 tooltip —— 原生 title 样式不可控且触屏不显示
+    btn.setAttribute('data-tip', on ? '退出对外展示模式' : '对外展示模式');
     var icon = btn.querySelector('svg');
     if (icon) icon.innerHTML = on ? EYE_CLOSED_PATHS : EYE_OPEN_PATHS;
   }
@@ -629,6 +630,10 @@
   // ---------- 格式化 ----------
   function pad2(n) { return n < 10 ? '0' + n : '' + n; }
 
+  // F1（2026-11-12 用户拍板撤销去零段）：主值统一为「X 天 HH:MM:SS」。
+  // 原因：不足一天时若省略「0 天」，卡片间的字符串长度与观感不一致（用户实测反馈）；
+  // 与规范 §8.5「禁止 0 开头当主值」冲突，已登记进规范 §20 例外。
+  // str 供大计时器 / 列表主值；short 供统计卡与 toast 等次要位置；compact 不变。
   function formatDuration(ms) {
     if (ms == null || ms < 0) ms = 0;
     var totalSec = Math.floor(ms / 1000);
@@ -693,6 +698,14 @@
   // 构建破戒原因标签选择器（多选，可选填），返回 { getValue() }
   function buildTagPicker(container, initialTags) {
     var selected = Array.isArray(initialTags) ? initialTags.filter(Boolean).slice() : [];
+    // R3-15：历史/导入数据可能带预置列表之外的原因标签 —— 保存时原样保留，
+    // 但选择器原先不渲染它们，用户会误以为丢了。补成只读 chip（不可点，不参与增删）。
+    selected.filter(function (t) { return RELAPSE_REASONS.indexOf(t) < 0; }).forEach(function (t) {
+      var chip = document.createElement('span');
+      chip.className = 'tag-opt static';
+      chip.textContent = t;
+      container.appendChild(chip);
+    });
     RELAPSE_REASONS.forEach(function (tag) {
       var b = document.createElement('button');
       b.type = 'button';
@@ -1065,7 +1078,10 @@
   var detailId = null;
   var calMonthOffset = 0; // 用于日历翻月
   var calView = 'month'; // 'month' | 'year'  日历视图切换
-  var detailTab = 'overview'; // 详情页页签：overview | records | reviews | badges（进详情重置为概览）
+  var detailTab = 'overview'; // 详情页页签：overview | records | reviews | badges | reviewEdit（进详情重置为概览）
+  var reviewEditId = null;   // F2：复盘独立视图正在编辑的复盘 id（detailTab==='reviewEdit' 且为 null = 新建）
+  var reviewEditCycle = null; // F2：新建复盘时的默认周期（来自横幅 / 提示弹窗的 context）
+  var reviewEditInit = null; // F2：进入视图时的初始值（返回前的脏检查基准）
   var detailSearch = '';  // 详情页历史记录搜索关键字
   var listScrollY = 0;    // 离开首页时的滚动位置（返回时恢复，避免长列表回到头部）
   var listFilter = FILTER_ALL; // 首页分类筛选（v5）
@@ -1094,14 +1110,12 @@
       if (!card) return;
       var streak = currentStreak(p);
       var timeEl = card.querySelector('.pc-time');
-      var metaEl = card.querySelector('.pc-meta b');
       if (!timeEl) return;
       if (streak != null) {
         var dur = formatDuration(streak);
         // .streak-text 是 JS 选择器钩子（ticker 每秒靠它更新计时文本），有意不配样式，勿当死代码删除
         var t = timeEl.querySelector('.streak-text');
         if (t) t.textContent = dur.str;
-        if (metaEl) metaEl.textContent = dur.short;
         // 里程碑/复盘检查：只在"天数刚变化"时执行
         if (lastCheckedDays[p.id] !== dur.d) {
           lastCheckedDays[p.id] = dur.d;
@@ -1293,6 +1307,7 @@
            + '  <div class="em">🔍</div>'
            + '  <h3 style="font-size: 16px;">这个分类下还没有项目</h3>'
            + '  <p>换个分类看看，或者给项目设置分类</p>'
+           + '  <button class="btn primary small" onclick="window.__qt.setListFilter(\'\')">清除筛选，看全部</button>'
            + '</div>';
       main.innerHTML = html;
       bindFilterChips();
@@ -1327,19 +1342,18 @@
            + '      ' + svgIcon(SVG_EDIT, 18) + ''
            + '    </button>'
            + '  </div>'
-           + '  <div class="pc-time' + (blurred ? ' is-blurred' : '') + '" data-streak-ts="' + (function () { var ts = lastRelapseTs(p); return ts == null ? projectStartTs(p) : ts; })() + '">'
+           + '  <div class="pc-time' + (blurred ? ' is-blurred' : '') + '">'
            + (streak != null
                 ? '<span class="streak-text">' + dur.str + '</span>'
                 : '<span style="color: var(--text-mute); font-size: 24px; font-weight: 600;">尚未开始</span>')
            + '  </div>'
            + '  <div class="pc-meta' + (blurred ? ' is-blurred' : '') + '">'
-           + '    <span>已坚持<b data-streak-b="0">' + (streak != null ? dur.short : '—') + '</b></span>'
            + '    <span>历史最长 <b>' + (p.bestStreak ? formatDuration(p.bestStreak).short : '—') + '</b></span>'
            + '    <span>破戒 <b>' + totalRecords + '</b> 次</span>'
            + (p.category ? '    <span class="cat-chip">' + esc(p.category) + '</span>' : '')
            + '  </div>'
            + '  <div class="pc-actions" onclick="event.stopPropagation();">'
-           + '    <button class="btn primary" style="flex: 1;" onclick="window.__qt.openAddRecord(\'' + p.id + '\')">+ 又做了</button>'
+           + '    <button class="btn log" style="flex: 1;" onclick="window.__qt.openAddRecord(\'' + p.id + '\')">+ 又做了</button>'
            + '    <button class="btn" onclick="window.__qt.openDetail(\'' + p.id + '\')">详情</button>'
            + '  </div>'
            + '</div>';
@@ -1442,25 +1456,28 @@
     var blurred = isPriv && shouldBlur(p);
     var eyeCls = blurred ? '' : ' on';
 
-    var html = ''
-      + '<div class="detail-head">'
-      + '  <button class="back-btn" onclick="window.__qt.goHome()" aria-label="返回">'
-      + '    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>'
-      + '  </button>'
-      + '  <div class="detail-title' + (blurred ? ' is-blurred' : '') + '" style="flex:1;min-width:0;">'
-      + (isPriv && !blurred ? '<span title="隐私项目" style="margin-right:4px;">🔒</span>' : '')
-      + esc(p.emoji) + ' ' + esc(p.name) + '</div>'
-      + (isPriv
-          ? '<button class="pc-eye' + eyeCls + '" aria-label="' + (blurred ? '睁眼查看' : '闭眼隐藏') + '" title="' + (blurred ? '点击查看内容' : '点击隐藏内容') + '" onclick="window.__qt.toggleEye(\'' + p.id + '\')">'
-          +   (blurred
-          ?     SVG_EYE_CLOSED
-          :     SVG_EYE_OPEN)
-          + '</button>'
-          : '')
-      + '  <button class="icon-btn" onclick="window.__qt.openEditProject(\'' + p.id + '\')" aria-label="编辑">'
-      + '    ' + svgIcon(SVG_EDIT, 18) + ''
-      + '  </button>'
-      + '</div>';
+    var html = '';
+    // F2：复盘独立视图自带返回头，隐藏项目详情头（否则出现两层标题与两个返回箭头）
+    if (detailTab !== 'reviewEdit') {
+      html += '<div class="detail-head">'
+        + '  <button class="back-btn" onclick="window.__qt.goHome()" aria-label="返回">'
+        + '    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>'
+        + '  </button>'
+        + '  <div class="detail-title' + (blurred ? ' is-blurred' : '') + '" style="flex:1;min-width:0;">'
+        + (isPriv && !blurred ? '<span title="隐私项目" style="margin-right:4px;">🔒</span>' : '')
+        + esc(p.emoji) + ' ' + esc(p.name) + '</div>'
+        + (isPriv
+            ? '<button class="pc-eye' + eyeCls + '" aria-label="' + (blurred ? '睁眼查看' : '闭眼隐藏') + '" title="' + (blurred ? '点击查看内容' : '点击隐藏内容') + '" onclick="window.__qt.toggleEye(\'' + p.id + '\')">'
+            +   (blurred
+            ?     SVG_EYE_CLOSED
+            :     SVG_EYE_OPEN)
+            + '</button>'
+            : '')
+        + '  <button class="icon-btn" onclick="window.__qt.openEditProject(\'' + p.id + '\')" aria-label="编辑">'
+        + '    ' + svgIcon(SVG_EDIT, 18) + ''
+        + '  </button>'
+        + '</div>';
+    }
 
     // 隐私横幅提示（模糊状态下解释如何查看）
     if (isPriv && blurred) {
@@ -1469,15 +1486,27 @@
 
     // 页签栏（用户决策：详情页分区展示，单屏不再渲染全部 9 区块）
     // 概览=计时+数据+目标+周报+删除；记录=日历+历史；复盘=洞察+复盘；成就=徽章墙
+    // F2：复盘书写是独立视图（reviewEdit），不显示页签栏，只保留返回入口。
+    // 进入视图后目标复盘被其他标签页删除 → 先归一化回复盘列表，避免幽灵视图。
+    if (detailTab === 'reviewEdit' && reviewEditId &&
+        !(p.reviews || []).some(function (x) { return x.id === reviewEditId; })) {
+      reviewEditId = null;
+      reviewEditInit = null;
+      detailTab = 'reviews';
+    }
     var banner = buildReviewBanner(p, streak);
-    html += '<div class="tabs">'
-         + '  <button class="tab' + (detailTab === 'overview' ? ' active' : '') + '" data-detail-tab="overview">概览</button>'
-         + '  <button class="tab' + (detailTab === 'records' ? ' active' : '') + '" data-detail-tab="records">记录</button>'
-         + '  <button class="tab' + (detailTab === 'reviews' ? ' active' : '') + '" data-detail-tab="reviews">复盘</button>'
-         + '  <button class="tab' + (detailTab === 'badges' ? ' active' : '') + '" data-detail-tab="badges">成就</button>'
-         + '</div>';
+    if (detailTab !== 'reviewEdit') {
+      html += '<div class="tabs">'
+           + '  <button class="tab' + (detailTab === 'overview' ? ' active' : '') + '" data-detail-tab="overview">概览</button>'
+           + '  <button class="tab' + (detailTab === 'records' ? ' active' : '') + '" data-detail-tab="records">记录</button>'
+           + '  <button class="tab' + (detailTab === 'reviews' ? ' active' : '') + '" data-detail-tab="reviews">复盘</button>'
+           + '  <button class="tab' + (detailTab === 'badges' ? ' active' : '') + '" data-detail-tab="badges">成就</button>'
+           + '</div>';
+    }
 
-    if (detailTab === 'records') {
+    if (detailTab === 'reviewEdit') {
+      html += renderReviewEdit(p);
+    } else if (detailTab === 'records') {
       // 日历
       html += '<div class="section-title">日历</div>';
       html += renderCalendar(p);
@@ -1499,16 +1528,21 @@
            + '  <div class="since">' + (lastTs ? '自 ' + formatDateTime(lastTs) + ' · ' + formatRelative(lastTs) : '点击下方按钮记录你的第一次') + '</div>'
            + '</div>';
       // 操作按钮
-      html += '<button class="btn primary block" onclick="window.__qt.openAddRecord(\'' + p.id + '\')">+ 我又做了这件事</button>';
+      html += '<button class="btn log block" onclick="window.__qt.openAddRecord(\'' + p.id + '\')">+ 我又做了这件事</button>';
       // 复盘横幅
       if (banner) html += banner;
       // 统计网格
+      // 「当前连胜」不再单独占一格：它与上方大计时器是同一个值（原先三处同值、三种格式）。
+      // 空出的位置给「已追踪天数」——大计时器回答"坚持了多久"，这里回答"这个项目跟了多久"。
+      // 「目标」不放进这里：下方 goal-card 已经显示目标天数与进度，再放一张是重复。
       html += '<div class="section-title">数据</div>';
       html += '<div class="stat-grid' + (blurred ? ' is-blurred' : '') + '">'
            + statCard('历史最长', best ? best.short : '—', best ? best.str : '暂无')
            + statCard('破戒次数', String(p.records.length), (lastTs != null ? ('最近 ' + formatRelative(lastTs)) : '暂无破戒'))
-           + statCard('开始时间', startTs ? formatDateTime(startTs).slice(5) : '—', startTs ? formatRelative(startTs) : '—')
-           + statCard('当前连胜', streak != null ? dur.compact : '—', streak != null ? dur.short : '尚未开始')
+           + statCard('开始时间', startTs ? formatDateTime(startTs).slice(5) : '—',
+                      startTs ? ('已追踪 ' + Math.max(0, Math.floor((Date.now() - startTs) / DAY_MS)) + ' 天') : '—')
+           + statCard('复盘', String((p.reviews || []).length) + ' 次',
+                      (p.reviews && p.reviews.length) ? ('最近 ' + formatRelative(p.reviews[p.reviews.length - 1].ts)) : '还没做过')
            + '</div>';
       // 目标进度（C1：设置了 goalDays 时显示进度条）
       if (p.goalDays > 0) {
@@ -1580,8 +1614,20 @@
           rows.innerHTML = renderHistoryRows(p);
         }, SEARCH_DEBOUNCE);
       });
-      if (wasFocused || detailSearch) searchInput.focus();
+      // R3-14：只在"重绘前焦点就在搜索框上"时归还焦点。原先 `|| detailSearch`
+      // 会让任何 render（翻月 / 切页签返回）都把焦点抢回搜索框。
+      if (wasFocused) searchInput.focus();
     }
+
+    // F2：复盘独立视图的事件绑定（返回 / 保存 / 删除走渲染期绑定，便于测试驱动）
+    var reviewBack = main.querySelector('[data-review-back]');
+    if (reviewBack) reviewBack.addEventListener('click', reviewEditBack);
+    var reviewSave = main.querySelector('#qt-review-save');
+    if (reviewSave) reviewSave.addEventListener('click', function () { saveReviewEdit(p); });
+    var reviewDel = main.querySelector('#qt-review-del');
+    if (reviewDel) reviewDel.addEventListener('click', function () {
+      if (reviewEditId) confirmDeleteReview(p.id, reviewEditId);
+    });
   }
 
   // 历史记录区（独立渲染：搜索时只重建结果行，日历/统计/复盘/输入框都不受影响）
@@ -1845,7 +1891,9 @@
       { icon: '⚡', name: '诚实记录', desc: '24 小时内又破戒，也如实记下', unlocked: fastRebound },
       { icon: '🧘', name: '复盘初体验', desc: '完成第一次复盘', unlocked: reviewCount >= 1 },
       { icon: '📚', name: '复盘达人', desc: '完成 3 次复盘', unlocked: reviewCount >= 3 },
-      { icon: '🎯', name: '目标达成', desc: '完成设定的目标天数', unlocked: p.goalDays > 0 && days >= p.goalDays },
+      // R3-03：与连胜系徽章同口径 —— 历史最长达标也算达成，复吸不收回。
+      // 目标进度卡（goal-card）保持"当前连胜进度"仪表语义，与此处（成就记录）分工不同。
+      { icon: '🎯', name: '目标达成', desc: '曾连续坚持满目标天数（复吸不收回）', unlocked: p.goalDays > 0 && (days >= p.goalDays || bestDays >= p.goalDays) },
       { icon: '🛡️', name: '戒断勇士', desc: '破戒 ≥5 次仍不放弃', unlocked: relapseCount >= 5 }
     ];
   }
@@ -2026,7 +2074,7 @@
         if (future) cls += ' future';
         else cls += ' lv-' + level;
         var title = key + (count ? ' · ' + count + ' 次' : ' · 0 次');
-        html += '<div class="' + cls + '" title="' + esc(title) + '" data-key="' + key + '" data-count="' + count + '"></div>';
+        html += '<div class="' + cls + '" title="' + esc(title) + '"></div>';
       }
       html += '</div>';
     }
@@ -2153,13 +2201,45 @@
     }
   }
 
+  // R3-06：ESC 脏表单保护。表单弹窗挂载时记录各字段的初始值，ESC 关闭前对比，
+  // 有改动先弹确认（确认后整栈关闭），无改动直接关。纯展示弹窗不注册 tracker。
+  // 局限：emoji / 原因标签 / 分类是按钮型选择器，改动不参与脏判断（一键可重选，风险低）。
+  function trackFormDirty(back) {
+    var fields = Array.prototype.slice.call(back.querySelectorAll('input, textarea, select'));
+    var initial = fields.map(function (el) {
+      return el.type === 'checkbox' ? el.checked : el.value;
+    });
+    return function () {
+      return fields.some(function (el, i) {
+        return (el.type === 'checkbox' ? el.checked : el.value) !== initial[i];
+      });
+    };
+  }
+
+  // 确认弹窗本身不带 tracker：再按一次 ESC 会直接关掉它、回到表单，不会叠出第二层。
+  function confirmDiscardForm() {
+    showModal('放弃未保存的修改？',
+      '<p class="dlg-note">弹窗里有尚未保存的输入，关闭后不会保留。</p>'
+      + '<div class="modal-actions">'
+      + '  <button class="btn ghost" id="qt-discard-cancel">继续编辑</button>'
+      + '  <button class="btn danger" id="qt-discard-ok">放弃修改</button>'
+      + '</div>',
+      function (back) {
+        back.querySelector('#qt-discard-cancel').addEventListener('click', closeModal);
+        back.querySelector('#qt-discard-ok').addEventListener('click', function () {
+          closeModalsAbove(0);
+          render();
+        });
+      });
+  }
+
   // ---------- 新建/编辑项目 ----------
   function openNewProject() {
     closeModal(); // 排他性弹窗：先关已有弹窗（确认类弹窗才会叠加）
     var html = ''
       + '<div class="field"><label for="qt-name">项目名称</label><input class="input" id="qt-name" placeholder="例如：戒奶茶" maxlength="20"></div>'
-      + '<div class="field"><label for="qt-start">开始戒断时间</label><input class="input" type="datetime-local" id="qt-start" value="' + inputDateTimeValue(Date.now()) + '"><div style="font-size:12px;color:var(--text-mute);margin-top:6px;">从此刻开始计时。可以改成更早的时间（回溯记录）。</div></div>'
-      + '<div class="field"><label for="qt-goal">目标坚持天数（可选）</label><input class="input" type="number" id="qt-goal" min="0" max="3650" placeholder="例如：30 天，留空则不限目标"><div style="font-size:12px;color:var(--text-mute);margin-top:6px;">设定目标后详情页会显示进度条。</div></div>'
+      + '<div class="field"><label for="qt-start">开始戒断时间</label><input class="input" type="datetime-local" id="qt-start" value="' + inputDateTimeValue(Date.now()) + '"><div class="field-help">可回填更早的开始时间。</div></div>'
+      + '<div class="field"><label for="qt-goal">目标坚持天数（可选）</label><input class="input" type="number" id="qt-goal" min="0" max="3650" placeholder="例如：30 天，留空则不限目标"></div>'
       + '<div class="field"><div class="field-label">分类（可选）</div><div class="tag-picker" id="qt-cat"></div></div>'
       + '<div class="field"><label class="privacy-toggle"><input type="checkbox" id="qt-private"> <span>设为隐私项目（对外展示时内容模糊，需点 👁 查看）</span></label></div>'
       + '<div class="field"><div class="field-label">选择图标</div><div class="emoji-picker" id="qt-emoji"></div></div>'
@@ -2169,6 +2249,7 @@
       + '</div>';
 
     showModal('新建项目', html, function (back) {
+      back._qtIsDirty = trackFormDirty(back); // R3-06
       var nameInput = back.querySelector('#qt-name');
       if (nameInput) nameInput.focus(); // autofocus 对 innerHTML 插入无效，显式聚焦
       var picker = back.querySelector('#qt-emoji');
@@ -2226,6 +2307,7 @@
       + '  <button class="btn primary" id="qt-save-btn">保存</button>'
       + '</div>';
     showModal('编辑项目', html, function (back) {
+      back._qtIsDirty = trackFormDirty(back); // R3-06
       var nameInput = back.querySelector('#qt-name');
       if (nameInput) nameInput.focus(); // autofocus 对 innerHTML 插入无效，显式聚焦
       var picker = back.querySelector('#qt-emoji');
@@ -2289,10 +2371,11 @@
       + '<div class="field"><label for="qt-note">备注（可选）</label><textarea class="textarea" id="qt-note" placeholder="比如：朋友聚会 / 心情不好…" maxlength="200"></textarea></div>'
       + '<div class="modal-actions">'
       + '  <button class="btn ghost" onclick="window.__qt.closeModal()">取消</button>'
-      + '  <button class="btn primary" id="qt-save-btn">确认记录</button>'
+      + '  <button class="btn log" id="qt-save-btn">确认记录</button>'
       + '</div>';
 
     showModal('记录一次破戒', html, function (back) {
+      back._qtIsDirty = trackFormDirty(back); // R3-06
       var timeInput = back.querySelector('#qt-time');
       var tagPicker = buildTagPicker(back.querySelector('#qt-tags'), []);
       timeInput.focus();
@@ -2389,6 +2472,7 @@
       + '</div>';
 
     showModal('编辑记录', html, function (back) {
+      back._qtIsDirty = trackFormDirty(back); // R3-06
       var tagPicker = buildTagPicker(back.querySelector('#qt-tags'), recordTags(r));
       back.querySelector('#qt-save-btn').addEventListener('click', function () {
         var unlock = lockSaveBtn(back.querySelector('#qt-save-btn'));
@@ -2409,131 +2493,136 @@
     });
   }
 
-  // ============== 复盘表单 ==============
-  // 通用表单渲染：prefill 可选 {achievement, improvement, nextPlan, cycleDays}
-  function reviewFormHtml(prefill, title) {
-    prefill = prefill || {};
+  // ============== 复盘书写（F2：独立视图，替代底部抽屉；§12.1 长书写用独立视图） ==============
+  // 视图状态：detailTab === 'reviewEdit' 时渲染；reviewEditId === null 表示新建。
+  function defaultReviewCycle(p) {
+    var streak = currentStreak(p);
+    var days = streak ? Math.floor(streak / DAY_MS) : 0;
+    return REVIEW_CYCLES.slice().reverse().find(function (c) { return c <= days; }) || REVIEW_CYCLES[0];
+  }
+
+  function enterReviewEdit(pid, rid, cycleDays) {
+    var p = getProject(pid);
+    if (!p) return;
+    if (guardPrivate(p)) return; // 演示模式锁定隐私项目
+    closeModal(); // 从复盘提示弹窗 / 横幅进入时先清空弹窗栈
+    view = 'detail';
+    detailId = pid;
+    detailTab = 'reviewEdit';
+    reviewEditId = rid || null;
+    reviewEditCycle = cycleDays || null;
+    var r = reviewEditId ? (p.reviews || []).find(function (x) { return x.id === reviewEditId; }) : null;
+    reviewEditInit = r
+      ? { cycleDays: r.cycleDays, achievement: r.achievement || '', improvement: r.improvement || '', nextPlan: r.nextPlan || '' }
+      : { cycleDays: reviewEditCycle || defaultReviewCycle(p), achievement: '', improvement: '', nextPlan: '' };
+    render();
+    window.scrollTo({ top: 0, behavior: 'instant' });
+  }
+
+  function openNewReview(pid, cycleDays) { enterReviewEdit(pid, null, cycleDays); }
+  function openEditReview(pid, rid) { enterReviewEdit(pid, rid, null); }
+
+  function exitReviewEdit() {
+    reviewEditId = null;
+    reviewEditInit = null;
+    detailTab = 'reviews';
+    render();
+  }
+
+  function renderReviewEdit(p) {
+    var r = reviewEditId ? (p.reviews || []).find(function (x) { return x.id === reviewEditId; }) : null;
+    var init = reviewEditInit || { cycleDays: defaultReviewCycle(p), achievement: '', improvement: '', nextPlan: '' };
     var cycleOptions = REVIEW_CYCLES.map(function (c) {
-      var sel = (prefill.cycleDays === c) ? ' selected' : '';
-      return '<option value="' + c + '"' + sel + '>' + c + ' 天</option>';
+      return '<option value="' + c + '"' + (init.cycleDays === c ? ' selected' : '') + '>' + c + ' 天</option>';
     }).join('');
-    return ''
-      + '<div class="field"><label for="qt-cycle">复盘周期</label>'
-      + '  <select class="input" id="qt-cycle">' + cycleOptions + '</select>'
-      + '  <div style="font-size:12px;color:var(--text-mute);margin-top:6px;">选择这次复盘对应的周期</div>'
-      + '</div>'
-      + '<div class="field"><label for="qt-ach">✨ 成就</label>'
-      + '  <textarea class="textarea" id="qt-ach" maxlength="500" placeholder="这周期你做到了什么？比如：连续 7 天没破戒，比上一次更稳">'
-      + esc(prefill.achievement || '') + '</textarea></div>'
-      + '<div class="field"><label for="qt-imp">🔧 不足 & 改进</label>'
-      + '  <textarea class="textarea" id="qt-imp" maxlength="500" placeholder="哪里做得不够好？下次怎么改？">'
-      + esc(prefill.improvement || '') + '</textarea></div>'
-      + '<div class="field"><label for="qt-next">🎯 下一步计划</label>'
-      + '  <textarea class="textarea" id="qt-next" maxlength="500" placeholder="下一个周期的具体目标是什么？">'
-      + esc(prefill.nextPlan || '') + '</textarea></div>'
-      + '<div class="modal-actions">'
-      + '  <button class="btn ghost" onclick="window.__qt.closeModal()">取消</button>'
-      + '  <button class="btn primary" id="qt-save-btn">' + esc(title || '保存') + '</button>'
+    return '<div class="review-view">'
+      + '  <div class="detail-head">'
+      + '    <button class="back-btn" data-review-back aria-label="返回">'
+      + '      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>'
+      + '    </button>'
+      + '    <div class="detail-title">' + (r ? '编辑复盘' : '新建复盘') + '</div>'
+      + '  </div>'
+      + '  <div class="review-fields">'
+      + '    <div class="field review-cycle"><label for="qt-cycle">复盘周期</label><select class="input" id="qt-cycle">' + cycleOptions + '</select></div>'
+      + '    <div class="field"><label for="qt-ach">✨ 成就</label><textarea class="textarea" id="qt-ach" maxlength="500" placeholder="这周期你做到了什么？比如：连续 7 天没破戒，比上一次更稳">' + esc(init.achievement) + '</textarea></div>'
+      + '    <div class="field"><label for="qt-imp">🔧 不足 &amp; 改进</label><textarea class="textarea" id="qt-imp" maxlength="500" placeholder="哪里做得不够好？下次怎么改？">' + esc(init.improvement) + '</textarea></div>'
+      + '    <div class="field"><label for="qt-next">🎯 下一步计划</label><textarea class="textarea" id="qt-next" maxlength="500" placeholder="下一个周期的具体目标是什么？">' + esc(init.nextPlan) + '</textarea></div>'
+      + '  </div>'
+      + '  <div class="review-savebar">'
+      + (r ? '<button class="btn danger small" id="qt-review-del">删除</button>' : '')
+      + '    <button class="btn primary" id="qt-review-save">保存复盘</button>'
+      + '  </div>'
       + '</div>';
   }
 
-  function openNewReview(pid, cycleDays) {
-    var p = getProject(pid);
-    if (!p) return;
-    if (guardPrivate(p)) return; // 演示模式锁定隐私项目
-    closeModal(); // 排他性弹窗
-    var streak = currentStreak(p);
-    var defaultCycle = cycleDays;
-    if (!defaultCycle) {
-      // 找最近一个跨过但还没复盘的周期
-      var days = streak ? Math.floor(streak / DAY_MS) : 0;
-      defaultCycle = REVIEW_CYCLES.slice().reverse().find(function (c) { return c <= days; }) || REVIEW_CYCLES[0];
-    }
-    var html = reviewFormHtml({ cycleDays: defaultCycle }, '保存复盘');
-    showModal('新建复盘', html, function (back) {
-      back.querySelector('#qt-save-btn').addEventListener('click', function () {
-        var unlock = lockSaveBtn(back.querySelector('#qt-save-btn'));
-        var cycle = parseInt(back.querySelector('#qt-cycle').value, 10) || defaultCycle;
-        var ach = back.querySelector('#qt-ach').value;
-        var imp = back.querySelector('#qt-imp').value;
-        var next = back.querySelector('#qt-next').value;
-        if (!ach.trim() && !imp.trim() && !next.trim()) {
-          unlock();
-          toast('至少填写一项内容');
-          return;
-        }
-        // N-03：原实现先 toast 警告再立刻 toast「复盘已保存」，而 toast() 会先删掉旧 toast，
-        // 那条警告用户永远看不到。改为明确的二次确认（不静默吞掉，也不被覆盖）。
-        var currentDays = streak ? Math.floor(streak / DAY_MS) : 0;
-        if (cycle > currentDays) {
-          unlock();
-          showModal('复盘周期超过当前坚持天数',
-            '<p class="dlg-note">当前仅坚持 <b>' + currentDays + '</b> 天，你选择了 <b>' + cycle + '</b> 天周期。</p>'
-            + '<p class="dlg-note-sub">仍要按 ' + cycle + ' 天记这次复盘吗？</p>'
-            + '<div class="modal-actions">'
-            + '  <button class="btn ghost" onclick="window.__qt.closeModal()">改周期</button>'
-            + '  <button class="btn primary" id="qt-cycle-ok">仍要保存</button>'
-            + '</div>',
-            function (b2) {
-              b2.querySelector('#qt-cycle-ok').addEventListener('click', function () {
-                addReview(pid, cycle, ach, imp, next);
-                closeModalsAbove(0); // 保存后回到详情页，不留任何弹窗
-                render();
-                toast('复盘已保存');
-              });
-            });
-          return;
-        }
-        addReview(pid, cycle, ach, imp, next);
-        closeModal();
-        render();
-        toast('复盘已保存');
+  // 返回 = 取消；有改动时先确认（与 v1.2.0 的 ESC 脏确认同语义）
+  function reviewEditBack() {
+    if (view !== 'detail' || detailTab !== 'reviewEdit') return;
+    var ach = main.querySelector('#qt-ach');
+    var imp = main.querySelector('#qt-imp');
+    var next = main.querySelector('#qt-next');
+    var cyc = main.querySelector('#qt-cycle');
+    var init = reviewEditInit;
+    var dirty = !!(init && (
+      (ach && ach.value !== init.achievement) ||
+      (imp && imp.value !== init.improvement) ||
+      (next && next.value !== init.nextPlan) ||
+      (cyc && parseInt(cyc.value, 10) !== init.cycleDays)
+    ));
+    if (!dirty) { exitReviewEdit(); return; }
+    showModal('放弃未保存的复盘？',
+      '<p class="dlg-note">复盘里有尚未保存的输入，返回后不会保留。</p>'
+      + '<div class="modal-actions">'
+      + '  <button class="btn ghost" onclick="window.__qt.closeModal()">继续编辑</button>'
+      + '  <button class="btn danger" id="qt-review-discard">放弃</button>'
+      + '</div>',
+      function (back) {
+        back.querySelector('#qt-review-discard').addEventListener('click', function () {
+          closeModal();
+          exitReviewEdit();
+        });
       });
-    });
   }
 
-  function openEditReview(pid, rid) {
-    var p = getProject(pid);
-    if (!p) return;
-    if (guardPrivate(p)) return; // 演示模式锁定隐私项目
-    closeModal(); // 排他性弹窗
-    var r = p.reviews.find(function (x) { return x.id === rid; });
-    if (!r) return;
-    var html = ''
-      + '<div class="field"><div class="field-label">复盘日期</div><div style="padding:11px 14px; background:var(--bg-input); border-radius:8px; font-size:14px;">'
-      + esc(formatDateTime(r.ts)) + '</div></div>'
-      + reviewFormHtml({
-          cycleDays: r.cycleDays,
-          achievement: r.achievement,
-          improvement: r.improvement,
-          nextPlan: r.nextPlan
-        }, '保存')
-      + '<div style="margin-top: -8px;"><button class="btn danger block" id="qt-del-review">删除这条复盘</button></div>';
-
-    showModal('编辑复盘', html, function (back) {
-      back.querySelector('#qt-save-btn').addEventListener('click', function () {
-        var unlock = lockSaveBtn(back.querySelector('#qt-save-btn'));
-        var cycle = parseInt(back.querySelector('#qt-cycle').value, 10) || r.cycleDays;
-        var ach = back.querySelector('#qt-ach').value;
-        var imp = back.querySelector('#qt-imp').value;
-        var next = back.querySelector('#qt-next').value;
-        // N-22：编辑路径补与新建一致的"至少填一项"校验（原先可存成全空卡片）
-        if (!ach.trim() && !imp.trim() && !next.trim()) { unlock(); toast('至少填写一项内容'); return; }
+  function saveReviewEdit(p) {
+    var cycleSel = main.querySelector('#qt-cycle');
+    var cycle = parseInt(cycleSel ? cycleSel.value : '', 10) || (reviewEditInit ? reviewEditInit.cycleDays : defaultReviewCycle(p));
+    var ach = main.querySelector('#qt-ach').value;
+    var imp = main.querySelector('#qt-imp').value;
+    var next = main.querySelector('#qt-next').value;
+    if (!ach.trim() && !imp.trim() && !next.trim()) { toast('至少填写一项内容'); return; }
+    var days = Math.floor((currentStreak(p) || 0) / DAY_MS);
+    function commit() {
+      if (reviewEditId) {
         // N-02：复盘已不存在时不得再报"已保存"
-        if (!updateReview(pid, rid, cycle, ach, imp, next)) {
-          closeModal();
-          render();
+        if (!updateReview(p.id, reviewEditId, cycle, ach, imp, next)) {
           toast('该复盘已不存在，改动未保存');
+          exitReviewEdit();
           return;
         }
-        closeModal();
-        render();
-        toast('已保存');
-      });
-      back.querySelector('#qt-del-review').addEventListener('click', function () {
-        confirmDeleteReview(pid, rid);
-      });
-    });
+      } else {
+        addReview(p.id, cycle, ach, imp, next);
+      }
+      exitReviewEdit();
+      toast('复盘已保存');
+    }
+    if (cycle > days) {
+      showModal('复盘周期超过当前坚持天数',
+        '<p class="dlg-note">当前仅坚持 <b>' + days + '</b> 天，你选择了 <b>' + cycle + '</b> 天周期。</p>'
+        + '<p class="dlg-note-sub">仍要按 ' + cycle + ' 天记这次复盘吗？</p>'
+        + '<div class="modal-actions">'
+        + '  <button class="btn ghost" onclick="window.__qt.closeModal()">改周期</button>'
+        + '  <button class="btn primary" id="qt-cycle-ok">仍要保存</button>'
+        + '</div>',
+        function (b2) {
+          b2.querySelector('#qt-cycle-ok').addEventListener('click', function () {
+            closeModal();
+            commit();
+          });
+        });
+      return;
+    }
+    commit();
   }
 
   function confirmDeleteReview(pid, rid) {
@@ -2547,7 +2636,10 @@
       function (back) {
         back.querySelector('#qt-confirm').addEventListener('click', function () {
           deleteReview(pid, rid);
-          closeModalsAbove(0); // N-02：同上，清空整栈避免留下已失效的「编辑复盘」弹窗
+          closeModalsAbove(0); // N-02：同上，清空整栈避免留下已失效的编辑视图
+          reviewEditId = null;
+          reviewEditInit = null;
+          if (detailTab === 'reviewEdit') detailTab = 'reviews';
           render();
           toast('已删除');
         });
@@ -2597,6 +2689,16 @@
       if (v && v.trim()) return v.trim();
     } catch (e) {}
     return '#1db954';
+  }
+
+  // R3-04：Canvas 海报的着色条与圆环同源 —— 从 accentColor() 解析 hex 加 alpha。
+  // 兜底值也是六位 hex；正则不匹配时回落品牌绿（防御分支，正常路径不可达）。
+  function accentTint(alpha) {
+    var v = accentColor();
+    if (/^#[0-9a-fA-F]{6}$/.test(v)) {
+      return 'rgba(' + parseInt(v.slice(1, 3), 16) + ',' + parseInt(v.slice(3, 5), 16) + ',' + parseInt(v.slice(5, 7), 16) + ',' + alpha + ')';
+    }
+    return 'rgba(29,185,84,' + alpha + ')';
   }
 
   function posterData(p, rangeDays, nowTs) {
@@ -2712,9 +2814,9 @@
     var EMOJI = '"Apple Color Emoji","Segoe UI Emoji",sans-serif';
 
     x.fillStyle = '#121212'; x.fillRect(0, 0, W, H);
-    x.fillStyle = 'rgba(29,185,84,.14)'; x.fillRect(0, 0, W, 8);
+    x.fillStyle = accentTint(0.14); x.fillRect(0, 0, W, 8);
 
-    x.fillStyle = '#6a6a6a'; x.font = '500 26px ' + CN;
+    x.fillStyle = '#9a9a9a'; x.font = '500 26px ' + CN;
     x.textAlign = 'left'; x.fillText('戒断 · 习惯追踪', PAD, 92);
     x.textAlign = 'right'; x.fillText('近 ' + d.rangeDays + ' 天', W - PAD, 92);
 
@@ -2742,7 +2844,7 @@
 
     function col(label, val, sub, cxp, align) {
       x.textAlign = align || 'left';
-      x.fillStyle = '#6a6a6a'; x.font = '500 26px ' + CN; x.fillText(label, cxp, 906);
+      x.fillStyle = '#9a9a9a'; x.font = '500 26px ' + CN; x.fillText(label, cxp, 906);
       x.fillStyle = '#ffffff'; x.font = 'bold 60px ' + CN; x.fillText(val, cxp, 972);
       x.fillStyle = '#b3b3b3'; x.font = '500 26px ' + CN; x.fillText(sub, cxp, 1014);
     }
@@ -2754,12 +2856,12 @@
         W - PAD, 'right');
 
     x.textAlign = 'left';
-    x.fillStyle = '#6a6a6a'; x.font = '500 26px ' + CN;
+    x.fillStyle = '#9a9a9a'; x.font = '500 26px ' + CN;
     x.fillText('已解锁徽章 ' + d.badgeUnlocked + ' / ' + d.badgeTotal, PAD, 1090);
     x.font = '40px ' + EMOJI;
     x.fillText(d.badgeIcons.slice(0, 10).join(' '), PAD, 1150);
 
-    x.textAlign = 'center'; x.fillStyle = '#6a6a6a'; x.font = '500 24px ' + CN;
+    x.textAlign = 'center'; x.fillStyle = '#9a9a9a'; x.font = '500 24px ' + CN;
     x.fillText('数据只存在你的设备里 · ' + formatDateTime(Date.now()).slice(0, 10), cx, H - 56);
     return cv;
   }
@@ -2877,7 +2979,7 @@
       + '<div class="field">'
       + '  <div class="field-label">配色</div>'
       + '  <div class="accent-row">'
-      + '    <button class="btn" id="qt-accent-green"><span class="accent-dot dot-green"></span>Spotify 绿</button>'
+      + '    <button class="btn" id="qt-accent-green"><span class="accent-dot dot-green"></span>森绿</button>'
       + '    <button class="btn" id="qt-accent-ocean"><span class="accent-dot dot-ocean"></span>海盐蓝</button>'
       + '    <button class="btn" id="qt-accent-teal"><span class="accent-dot dot-teal"></span>青瓷</button>'
       + '    <button class="btn" id="qt-accent-sunset"><span class="accent-dot dot-sunset"></span>落日橙</button>'
@@ -2886,7 +2988,7 @@
       + '<div class="divider"></div>'
       + '<div class="field">'
       + '  <div class="field-label">项目分类</div>'
-      + '  <button class="btn block" id="qt-cat-manage">分类管理（新增 / 重命名 / 删除）</button>'
+      + '  <button class="btn block" id="qt-cat-manage">分类管理</button>'
       + '</div>'
       + '<div class="divider"></div>'
       + '<div class="field">'
@@ -2898,9 +3000,11 @@
       + '    <input type="file" id="qt-import-file" accept="application/json,.json" style="display:none;">'
       + '  </div>'
       + '</div>'
-      + '<div style="font-size: 12px; color: var(--text-mute); margin-top: 16px; line-height: 1.6;">'
-      + '  你的所有数据都只存在本设备的浏览器中，<br>清除浏览器数据将永久丢失，请定期导出备份。'
-      + '  <br>版本 v' + APP_VERSION + ' · 数据结构 v' + SCHEMA_VERSION
+      + '<div class="divider"></div>'
+      + '<div class="settings-about">'
+      + '  <div class="settings-about-name">戒断 · 习惯追踪</div>'
+      + '  <div class="settings-about-ver">v' + APP_VERSION + '</div>'
+      + '  <p class="settings-about-note">数据仅存本机 · 清除浏览器数据将永久丢失，请定期导出备份</p>'
       + '</div>'
       + '<div class="modal-actions" style="margin-top: 20px;">'
       + '  <button class="btn ghost block" onclick="window.__qt.closeModal()">关闭</button>'
@@ -2922,7 +3026,10 @@
           auto: back.querySelector('#qt-theme-auto')
         };
         Object.keys(map).forEach(function (k) {
-          if (map[k]) map[k].classList.toggle('active', saved === k);
+          if (map[k]) {
+            map[k].classList.toggle('active', saved === k);
+            map[k].setAttribute('aria-pressed', saved === k ? 'true' : 'false'); // F15
+          }
         });
       }
       back.querySelector('#qt-theme-light').addEventListener('click', function () { setTheme('light'); });
@@ -2946,7 +3053,10 @@
           sunset: back.querySelector('#qt-accent-sunset')
         };
         Object.keys(map).forEach(function (k) {
-          if (map[k]) map[k].classList.toggle('active', saved === k);
+          if (map[k]) {
+            map[k].classList.toggle('active', saved === k);
+            map[k].setAttribute('aria-pressed', saved === k ? 'true' : 'false'); // F15
+          }
         });
       }
       back.querySelector('#qt-accent-green').addEventListener('click', function () { setAccent('green'); });
@@ -2956,6 +3066,8 @@
       refreshAccentBtns();
 
       back.querySelector('#qt-cat-manage').addEventListener('click', openCategoryManager);
+      // F15：打开即聚焦首个主题按钮（§8.9④），键盘用户可直接切换
+      back.querySelector('#qt-theme-light').focus();
 
       back.querySelector('#qt-export').addEventListener('click', function () {
         // 对外展示模式：导出会把全部隐私项目明文落盘，与 guardPrivate 同源，必须一并锁定
@@ -3097,7 +3209,10 @@
         // 当前浅色 → 点一下变深色：显示月亮
         : '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>';
     }
-    if (btn) btn.setAttribute('aria-label', dark ? '切换到浅色主题' : '切换到深色主题');
+    if (btn) {
+      btn.setAttribute('aria-label', dark ? '切换到浅色主题' : '切换到深色主题');
+      btn.setAttribute('data-tip', dark ? '切换到浅色主题' : '切换到深色主题');
+    }
   }
 
   // ---------- Toast ----------
@@ -3135,6 +3250,9 @@
     calView = 'month';
     detailSearch = '';
     detailTab = 'overview';
+    reviewEditId = null;
+    reviewEditCycle = null;
+    reviewEditInit = null;
     render();
     window.scrollTo({ top: 0, behavior: 'instant' });
   }
@@ -3169,8 +3287,17 @@
     document.getElementById('settings-btn').addEventListener('click', openSettings);
 
     // ESC 关闭最上层弹窗（配合弹窗栈）；Tab 在弹窗内循环（N-17 焦点陷阱）
+    // R3-06：栈顶是带未保存输入的表单弹窗时，先确认再关（见 trackFormDirty）。
     document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape') { closeModal(); return; }
+      if (e.key === 'Escape') {
+        var top = modalStack[modalStack.length - 1];
+        if (top && typeof top._qtIsDirty === 'function' && top._qtIsDirty()) {
+          confirmDiscardForm();
+          return;
+        }
+        closeModal();
+        return;
+      }
       trapFocus(e);
     });
 
@@ -3327,6 +3454,7 @@
       migrateProject: migrateProject,
       stashCorruptRaw: stashCorruptRaw,
       _getState: function () { return state; },
+      _topModal: function () { return modalStack[modalStack.length - 1] || null; }, // 测试钩子：ESC 脏表单守卫断言用（R3-06）
       // A-2 测试钩子：记录 CRUD 与起点/计时的纯计算入口（v7 口径断言需要）
       addRecord: addRecord,
       deleteRecord: deleteRecord,
@@ -3337,6 +3465,7 @@
       currentStreak: currentStreak,
       projectStartTs: projectStartTs,
       recalcBest: recalcBest,
+      formatDuration: formatDuration, // F1 断言用
       computeBadges: computeBadges,
       buildInsights: buildInsights,
       buildRecordCountMap: buildRecordCountMap,
@@ -3345,7 +3474,6 @@
       renderHistoryList: renderHistoryList,
       renderHistoryRows: renderHistoryRows,
       closeModalsAbove: closeModalsAbove,
-      toggleSortMode: toggleSortMode,
       setDemoMode: setDemoMode,
       shouldBlur: shouldBlur,
       modalDepth: function () { return modalStack.length; },

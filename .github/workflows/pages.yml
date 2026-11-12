@@ -17,8 +17,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # N-30：5 层测试必须先跑，失败则不部署。
-  # 原先 workflow 只做 checkout → upload → deploy，140 条断言全靠手动，任何回归都能直接上线。
+  # N-30：6 个测试脚本 + 语法检查必须先跑，失败则不部署。
+  # 原先 workflow 只做 checkout → upload → deploy，断言全靠手动，任何回归都能直接上线。
   # PR 上也跑测试（作为合并门禁），但不部署。
   test:
     runs-on: ubuntu-latest
@@ -37,6 +37,8 @@ jobs:
         run: node tests/picker-interaction.js
       - name: 样式守门
         run: node tests/style-consistency.js
+      - name: 配色对比度
+        run: node tests/contrast-check.js
       - name: SW 断言
         run: node tests/assert-sw.js
       - name: 静态资源校验

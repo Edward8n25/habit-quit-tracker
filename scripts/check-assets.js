@@ -108,6 +108,25 @@ const app = read('src/app.js');
 t('app.js 仍注册 sw.js（离线能力前置）',
   /serviceWorker\.register\(\s*['"]sw\.js['"]\s*\)/.test(app));
 
+// ---- 7. README 引用的本地资源存在（2026-11-12 改版新增）----
+// README 图片不进 SW 缓存，但 404 直接砸主页第一眼；路径错误只能靠肉眼发现，必须机器守。
+const readme = read('README.md');
+const mdRefs = [];
+for (const hit of readme.matchAll(/(?:src|href)\s*=\s*["']([^"']+)["']/g)) {
+  const v = hit[1];
+  if (/^(https?:|data:|#|mailto:)/i.test(v)) continue;
+  mdRefs.push(v);
+}
+for (const hit of readme.matchAll(/!\[[^\]]*\]\(([^)\s]+)\)/g)) {
+  const v = hit[1];
+  if (/^(https?:|data:|#)/i.test(v)) continue;
+  mdRefs.push(v);
+}
+const brokenMd = mdRefs.filter((v) => !exists(v.replace(/^\.\//, '')));
+t('README 引用的本地资源都存在',
+  brokenMd.length === 0,
+  brokenMd.length ? '缺失：' + brokenMd.join(', ') : mdRefs.length + ' 个引用全部存在');
+
 // ---- 输出 ----
 let pass = 0;
 results.forEach(([name, ok, detail]) => {

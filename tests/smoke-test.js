@@ -955,6 +955,104 @@ const seedV5 = { [MAIN_K]: projV5, [BAK_K]: projV5 };
   results.push(['B-3 N-23：touchmove 只在拖拽期间注册', !inInit && inDragStart,
     'init=' + inInit + ' dragStart=' + inDragStart]);
 }
+// 14.9 R3-03：目标达成徽章口径 —— 历史最长达标也算达成（复吸不收回），与连胜系徽章一致
+{
+  const r = bootWith({});
+  const p = { id: 'r3d', name: 't', emoji: 'x', category: '', order: 0,
+    startTs: Date.now() - 35 * 86400000,
+    records: [{ id: 'a', t: Date.now() - 2 * 86400000, n: '', tags: [] }],
+    reviews: [], bestStreak: 0, goalDays: 30, private: false, eyeOpen: false,
+    seenMilestones: [], seenReviewCycles: [], dismissedReviewBanner: null, createdAt: Date.now() - 35 * 86400000 };
+  r.qt.recalcBest(p);
+  const b = r.qt.computeBadges(p);
+  const goal = b.find(x => x.name === '目标达成');
+  const three = b.find(x => x.name === '三天不倒');
+  results.push(['R3-03：复吸后目标徽章保留（历史最长 ≥ 目标）',
+    goal.unlocked === true && three.unlocked === true,
+    'goal=' + goal.unlocked + ' · best=' + Math.round(p.bestStreak / 86400000) + '天']);
+}
+// 14.10 R3-07：CSS 存在 prefers-reduced-motion 兜底（第 1 轮 A2 清账）
+{
+  const html2 = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+  results.push(['R3-07：存在 prefers-reduced-motion 兜底',
+    html2.indexOf('prefers-reduced-motion') >= 0]);
+}
+
+// 14.11 F1（2026-11-12 用户拍板撤销去零段）：主值统一为「X 天 HH:MM:SS」
+{
+  const r = bootWith({});
+  const fd = r.qt.formatDuration;
+  const a = fd(6 * 3600000 + 12 * 60000 + 45000);
+  const b = fd(26 * 3600000 + 2 * 60000);
+  const c = fd(90 * 1000);
+  results.push(['F1 统一格式：不足一天也保留「0 天」前缀', a.str === '0 天 06:12:45' && a.short === '0天 6时 12分', a.str + ' / ' + a.short]);
+  results.push(['F1 满一天：格式不变', b.str === '1 天 02:02:00' && b.short === '1天 2时 2分', b.str + ' / ' + b.short]);
+  results.push(['F1 不足一小时：仍保留完整字段（结构统一）', c.str === '0 天 00:01:30' && c.short === '0天 0时 1分', c.str + ' / ' + c.short]);
+}
+// 14.15 设置面板展示：配色等宽单行 + 「关于」块
+{
+  const src = fs.readFileSync(path.join(ROOT, 'src', 'app.js'), 'utf8');
+  const html3 = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+  results.push(['设置：四个配色按钮在同一 accent-row', (src.match(/class="accent-row"/g) || []).length === 1 && src.indexOf('森绿') >= 0]);
+  results.push(['设置：配色按钮等宽（与主题行同构）', /\.accent-row \.btn \{[^}]*flex: 1 1 0/.test(html3)]);
+  results.push(['设置：页脚为「关于」块且不显示数据结构版本', src.indexOf('settings-about') >= 0 && src.indexOf('数据结构 v') < 0]);
+}
+// 14.12 F2：复盘书写为独立视图（非弹窗），返回后不残留（复用带 #seed 的首个沙箱）
+{
+  qt.openDetail('demo1');
+  qt.openNewReview('demo1');
+  const inView = main.innerHTML.indexOf('review-view') >= 0
+    && main.innerHTML.indexOf('保存复盘') >= 0 && qt.modalDepth() === 0;
+  qt.setDetailTab('reviews');
+  results.push(['F2 复盘书写为独立视图且可返回列表',
+    inView && main.innerHTML.indexOf('review-view') < 0,
+    'depth=' + qt.modalDepth()]);
+}
+// 14.13 F9：筛选空态带「清除筛选」按钮
+{
+  qt.goHome();
+  qt.setListFilter('不存在的分类');
+  results.push(['F9 筛选空态带清除筛选按钮', main.innerHTML.indexOf('清除筛选，看全部') >= 0]);
+  qt.setListFilter('');
+}
+// 14.14 F3/F4/F5/F6/F8 + heat token 静态检查
+{
+  const html2 = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+  results.push(['F3/F4：无 transition: all，且有按压反馈',
+    html2.indexOf('transition: all') < 0 && /\.btn:active\s*\{[^}]*scale\(\.985\)/.test(html2)]);
+  results.push(['F5：原生表面已上色（选区/光标/滚动条）',
+    html2.indexOf('::selection') >= 0 && html2.indexOf('caret-color') >= 0 && html2.indexOf('scrollbar-color') >= 0]);
+  results.push(['F6/F8：胶囊命中区 44px、圆角归 4px 档',
+    /inset: -4px 0/.test(html2) && /\.cal-day \{[^}]*border-radius: var\(--radius-xs\)/.test(html2)]);
+  results.push(['热力 token 四配色配对存在', (html2.match(/--heat-2-fg/g) || []).length >= 8]);
+}
+
+// 14.16 F13/F14/F15/F16：顶部导航与设置面板收尾
+{
+  const src = fs.readFileSync(path.join(ROOT, 'src', 'app.js'), 'utf8');
+  const html3 = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+  results.push(['F13：顶部副标题已删除（无安抚话术）',
+    html3.indexOf('app-sub') < 0 && html3.indexOf('你的数据只属于你') < 0]);
+  results.push(['F14：图标按钮统一 data-tip（无原生 title；::before 居中、不占 ::after 命中区）',
+    html3.indexOf('data-tip=') >= 0 && html3.indexOf('.icon-btn[data-tip]::before') >= 0
+    && /\.icon-btn\[data-tip\]::before \{[^}]*left: 50%/.test(html3)
+    && html3.indexOf('title="对外展示模式') < 0 && src.indexOf('data-tip') >= 0]);
+  results.push(['F15：设置按钮 aria-pressed + 打开聚焦首控件',
+    src.indexOf("setAttribute('aria-pressed'") >= 0 && src.indexOf("qt-theme-light').focus()") >= 0]);
+  results.push(['F16：分类管理文案已压缩',
+    src.indexOf('分类管理（新增 / 重命名 / 删除）') < 0]);
+}
+
+// 14.17 图标与 manifest：纯几何图标 + maskable 拆分
+{
+  const icon = fs.readFileSync(path.join(ROOT, 'assets', 'icons', 'icon.svg'), 'utf8');
+  const mf = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
+  results.push(['图标为纯几何（无 <text> / 无渐变）',
+    icon.indexOf('<text') < 0 && icon.indexOf('linearGradient') < 0 && icon.indexOf('<circle') >= 0]);
+  results.push(['manifest：svg 标 any，512 PNG 标 any maskable',
+    mf.icons.some(function (i) { return /icon\.svg$/.test(i.src) && i.purpose === 'any'; }) &&
+    mf.icons.some(function (i) { return /icon-512\.png$/.test(i.src) && /maskable/.test(i.purpose); })]);
+}
 
 // 输出
 let pass = 0;

@@ -12,11 +12,19 @@ const app = fs.readFileSync(path.join(ROOT, 'src', 'app.js'), 'utf8');
 const results = [];
 const t = (name, ok, detail) => results.push([name, ok, detail || '']);
 
+// R3-01：版本一致性改为真解析 —— 旧实现是写死的正则（只能拦 APP_VERSION 被改动，
+// 拦不住「tag 推了 v2.0.0 而 APP_VERSION 还是 1.1.0」这类组合）。
+// 现取 CHANGELOG 第一个 `## [x.y.z]` 版本头与 APP_VERSION 实时比对；[Unreleased] 段不参与。
+const changelog = fs.readFileSync(path.join(ROOT, 'CHANGELOG.md'), 'utf8');
+const clVersion = (changelog.match(/^## \[(\d+\.\d+\.\d+)\]/m) || [])[1];
+const appVersion = (app.match(/APP_VERSION = '([^']+)'/) || [])[1];
+
 t('activate 清理限定 quit-tracker- 前缀（同源共存不互删）',
   /k\.startsWith\('quit-tracker-'\) && k !== CACHE/.test(sw));
 t('CACHE 名以 quit-tracker- 开头（前缀过滤自身可达）', /const CACHE = 'quit-tracker-/.test(sw));
 t('SW 注册调用存在（离线能力前置）', /serviceWorker\.register\('sw\.js'\)/.test(app));
-t('APP_VERSION 与 CHANGELOG 最新版本对应（1.1.0）', /APP_VERSION = '1\.1\.0'/.test(app));
+t('APP_VERSION 与 CHANGELOG 最新版本一致', clVersion === appVersion,
+  'CHANGELOG=' + (clVersion || '未解析到') + ' · APP_VERSION=' + (appVersion || '未解析到'));
 
 let pass = 0;
 results.forEach(([name, ok, detail]) => {

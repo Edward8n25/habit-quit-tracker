@@ -14,9 +14,9 @@ const body = html.slice(html.indexOf('</style>'));
 
 // ---- 棘轮基线（批次 1/2 完成后的实测值；只许下调，下调后请同步改这里）
 const BASELINE = {
-  spacingViolations: 63,  // 结构性间距（>4px）不落在六档栅格内的次数
-  bareRadius: 2,          // 裸 px 圆角（.cal-day / .emoji-opt 的 6px，待批次 3 处理）
-  inlineStyles: 64,       // src/app.js 里的内联 style="..." 数量（A-3 批次：4 处确认文案改用 .dlg-note/.dlg-note-sub，66→64）
+  spacingViolations: 61,  // 结构性间距（>4px）不落在六档栅格内的次数（2026-11-12 UI 规范批次后实测 61）
+  bareRadius: 0,          // 裸 px 圆角（2026-11-12：.cal-day / .emoji-opt 归 4px 档后归零）
+  inlineStyles: 58,       // src/app.js 里的内联 style="..." 数量（2026-11-12：设置页脚去内联后 59→58）
 };
 // 有意不配样式的 JS 选择器钩子（不是遗漏，加进来需要写明原因）
 const STYLE_HOOKS = ['streak-text']; // ticker 每秒靠它更新计时文本

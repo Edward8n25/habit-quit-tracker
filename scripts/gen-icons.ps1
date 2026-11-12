@@ -1,52 +1,38 @@
-Add-Type -AssemblyName System.Drawing
+﻿Add-Type -AssemblyName System.Drawing
 
 function New-IconPng {
     param([int]$Size, [string]$Out)
     $bmp = New-Object System.Drawing.Bitmap $Size, $Size
     $g = [System.Drawing.Graphics]::FromImage($bmp)
+    $g.PageUnit = [System.Drawing.GraphicsUnit]::Pixel
+    $g.PageScale = 1
     $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
-    $g.TextRenderingHint = [System.Drawing.Text.TextRenderingHint]::AntiAliasGridFit
+    $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
 
-    # 圆角矩形背景
-    $rect = New-Object System.Drawing.Rectangle 0, 0, $Size, $Size
-    $radius = [int]($Size * 0.22)
-    $path = New-Object System.Drawing.Drawing2D.GraphicsPath
-    $path.AddArc($rect.X, $rect.Y, $radius, $radius, 180, 90)
-    $path.AddArc($rect.Right - $radius, $rect.Y, $radius, $radius, 270, 90)
-    $path.AddArc($rect.Right - $radius, $rect.Bottom - $radius, $radius, $radius, 0, 90)
-    $path.AddArc($rect.X, $rect.Bottom - $radius, $radius, $radius, 90, 90)
-    $path.CloseFigure()
+    $dark = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(255, 18, 18, 18))
+    $white = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::White)
+    $green = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(255, 29, 185, 84))
 
-    # 渐变
-    $rectBrush = New-Object System.Drawing.RectangleF 0, 0, $Size, $Size
-    $brush = New-Object System.Drawing.Drawing2D.LinearGradientBrush($rectBrush, [System.Drawing.Color]::FromArgb(255, 30, 215, 96), [System.Drawing.Color]::FromArgb(255, 15, 168, 71), 90)
-    $g.FillPath($brush, $path)
+    # 底：满幅方形（系统自行裁圆角；maskable 也要求满幅底）。圆角只保留在 icon.svg。
+    $g.FillRectangle($dark, 0, 0, $Size, $Size)
 
-    # 圆环
-    $ringWidth = [int]($Size * 0.04)
-    $ringSize = [int]($Size * 0.58)
-    $ringRect = New-Object System.Drawing.Rectangle ([int](($Size - $ringSize) / 2)), ([int](($Size - $ringSize) / 2)), $ringSize, $ringSize
-    $pen = New-Object System.Drawing.Pen ([System.Drawing.Color]::White), $ringWidth
-    $pen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
-    $pen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
-    $g.DrawArc($pen, $ringRect, -90, 300)
+    # 断环 = 外圆白 − 内圆深；扇形擦掉 9 点→12 点缺口；补两个圆帽（round cap）。
+    $c = [float]($Size / 2)
+    $outerR = [float]($Size * 176 / 512)
+    $innerR = [float]($Size * 124 / 512)
+    $g.FillEllipse($white, [float]($c - $outerR), [float]($c - $outerR), [float]($outerR * 2), [float]($outerR * 2))
+    $g.FillEllipse($dark,  [float]($c - $innerR), [float]($c - $innerR), [float]($innerR * 2), [float]($innerR * 2))
+    $g.FillPie($dark, 0, 0, $Size, $Size, 180, 90)
 
-    # 中心数字 0
-    $fontSize = [int]($Size * 0.42)
-    $font = New-Object System.Drawing.Font "Segoe UI", $fontSize, ([System.Drawing.FontStyle]::Bold)
-    $textBrush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::White)
-    $sf = New-Object System.Drawing.StringFormat
-    $sf.Alignment = [System.Drawing.StringAlignment]::Center
-    $sf.LineAlignment = [System.Drawing.StringAlignment]::Center
-    $textRect = New-Object System.Drawing.RectangleF 0, 0, $Size, ($Size * 0.78)
-    $g.DrawString("0", $font, $textBrush, $textRect, $sf)
+    $capR = [float]($Size * 26 / 512)
+    $topX = $c
+    $topY = [float]($Size * 106 / 512)
+    $g.FillEllipse($white, [float]($topX - $capR), [float]($topY - $capR), [float]($capR * 2), [float]($capR * 2))
+    $g.FillEllipse($white, [float]($topY - $capR), [float]($topX - $capR), [float]($capR * 2), [float]($capR * 2))
 
-    # 顶部小字 QUIT
-    $topFontSize = [int]($Size * 0.07)
-    $topFont = New-Object System.Drawing.Font "Segoe UI", $topFontSize, ([System.Drawing.FontStyle]::Bold)
-    $topRect = New-Object System.Drawing.RectangleF 0, ($Size * 0.18), $Size, ($Size * 0.1)
-    $topBrush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(220, 255, 255, 255))
-    $g.DrawString("QUIT", $topFont, $topBrush, $topRect, $sf)
+    # 起点圆点（品牌绿 #1db954），盖住顶部圆帽
+    $dotR = [float]($Size * 40 / 512)
+    $g.FillEllipse($green, [float]($topX - $dotR), [float]($topY - $dotR), [float]($dotR * 2), [float]($dotR * 2))
 
     $g.Dispose()
     $bmp.Save($Out, [System.Drawing.Imaging.ImageFormat]::Png)
@@ -54,7 +40,6 @@ function New-IconPng {
     Write-Host "Generated: $Out"
 }
 
-# 产物直落 assets/icons/（manifest 与 SW 引用的位置；此前落在 scripts/ 需手工挪）
 $root = Split-Path -Parent $PSScriptRoot
 $iconsDir = Join-Path $root "assets/icons"
 if (-not (Test-Path $iconsDir)) { New-Item -ItemType Directory -Path $iconsDir | Out-Null }

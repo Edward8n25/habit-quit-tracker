@@ -38,11 +38,13 @@
       --bg-card: #ffffff;
       --bg-input: #f1f1f1;
       --text: #121212;
-      --text-sub: #6a6a6a;
-      --text-mute: #9a9a9a;
+      /* 对比度校准：--text-sub 7.7:1、--text-mute 4.8:1（原 #6a6a6a 5.4 / #9a9a9a 2.8，
+         后者在 8 处小字上低于 WCAG AA 的 4.5:1） */
+      --text-sub: #52525b;
+      --text-mute: #71717a;
       --border: #e8e8e8;
-      --accent: #1db954;          /* Spotify green */
-      --accent-hover: #1ed760;
+      --accent: #15803d;          /* 浅色用深一档：原 #1db954 在白底仅 2.6:1，当文字/按钮都不合格 */
+      --accent-hover: #166534;
       --danger: #e22134;
       --shadow: 0 1px 3px rgba(0,0,0,.04), 0 4px 16px rgba(0,0,0,.04);
       --radius: 12px;
@@ -56,16 +58,31 @@
       --radius-xs: 4px;
       /* ---- 阴影两种：静止态 / 浮起态（仅卡片与弹窗使用）---- */
       --shadow-raised: 0 8px 24px rgba(0,0,0,.18);
-      /* 强调色底上的文字色（规范禁止散落写纯黑，统一走这个 token）*/
-      --on-accent: #062b14;
+      /* 强调色底上的文字色（规范禁止散落写纯黑，统一走这个 token）
+         浅色 accent 已改深（#15803d），原来的深绿 #062b14 压上去只有 3.1:1，
+         必须换成白色（5.02:1）。深色模式在下方单独覆写。 */
+      --on-accent: #ffffff;
       /* accent 语义衍生：着色底/语义文字随配色方案联动（切换 accent 时同步换色，
          避免绿色着色残留在其他配色下）；字面值 = 配色方案自身的 token 定义 */
-      --accent-text: #0fa847;
-      --accent-tint-08: rgba(29,185,84,.08);
-      --accent-tint-12: rgba(29,185,84,.12);
-      --accent-tint-15: rgba(29,185,84,.15);
-      --accent-tint-25: rgba(29,185,84,.25);
-      --accent-tint-35: rgba(29,185,84,.35);
+      --accent-text: #15803d;     /* 与 --accent 同值：校准后两者不再需要分开 */
+      --accent-tint-08: rgba(21,128,61,.08);
+      --accent-tint-12: rgba(21,128,61,.12);
+      --accent-tint-15: rgba(21,128,61,.15);
+      --accent-tint-25: rgba(21,128,61,.25);
+      --accent-tint-35: rgba(21,128,61,.35);
+      /* ---- 数据面语义色（2026-11-12）：破戒强度用暖色族，不随品牌色相；
+         按品牌冷暖微调色相：绿 38° 琥珀 / 青 20° 标准橙 / 蓝 14° 朱砂 / 日落 0° 红 ---- */
+      --heat-0: var(--bg-elev);
+      --heat-1: rgba(245,158,11,.22);
+      --heat-2: rgba(245,158,11,.90);
+      --heat-2-fg: #121212;
+      /* 复盘标签语义色（琥珀=不足 / 蓝=下一步）*/
+      --tag-imp-bg: rgba(255,159,10,.15);
+      --tag-imp-fg: #92400e;
+      --tag-next-bg: rgba(59,130,246,.15);
+      --tag-next-fg: #1d4ed8;
+      /* 统一缓动（§8.7 motionEaseOutQuint，禁 linear / ease-in-out 原值） */
+      --ease: cubic-bezier(0.23, 1, 0.32, 1);
     }
     [data-theme="dark"] {
       color-scheme: dark; /* N-26：原生控件跟随深色 */
@@ -75,63 +92,114 @@
       --bg-input: #282828;
       --text: #ffffff;
       --text-sub: #b3b3b3;
-      --text-mute: #6a6a6a;
+      /* 深色下次级字同样不合格（原 #6a6a6a 3.5:1），提到 5.4:1 */
+      --text-mute: #8a8a8a;
       --border: #282828;
-      --accent: #1db954;
+      --accent: #1db954;          /* 深色用亮一档：此处原值表现最好，保留 */
       --accent-hover: #1ed760;
       --danger: #f15e6c;
       --shadow: 0 1px 3px rgba(0,0,0,.4), 0 4px 16px rgba(0,0,0,.3);
       --tap: rgba(255,255,255,.06);
-      --accent-text: #4ade80;
+      /* 深色 accent 是亮绿，必须配深色字（白字只有 2.6:1）；
+         浅色模式已在上面把 --on-accent 改成白色，这里必须显式覆写，否则会继承错误值 */
+      --on-accent: #062b14;
+      --accent-text: #1db954;     /* 与 --accent 同值：原 #4ade80 过亮，与其余配色不一致 */
+      /* R3-13：深色 tint 阶梯对齐其余三配色（.14/.14/.18/.28/.38）——
+         11-10 批次补深色覆写时 green 只抬了前两档，属补全不一致而非设计 */
+      --accent-tint-08: rgba(29,185,84,.14);
+      --accent-tint-12: rgba(29,185,84,.14);
+      --accent-tint-15: rgba(29,185,84,.18);
+      --accent-tint-25: rgba(29,185,84,.28);
+      --accent-tint-35: rgba(29,185,84,.38);
+      --heat-0: #2a2a2a;
+      --heat-1: rgba(245,158,11,.25);
+      --heat-2: rgba(245,158,11,.82);
+      --heat-2-fg: #121212;
+      --tag-imp-fg: #fbbf24;
+      --tag-next-fg: #60a5fa;
     }
     /* ============== 配色方案（设置内切换；只动 accent 系 token，背景/文字保持中性） ============== */
     /* 浅色 hover 走「一步加深」、深色 hover 走「一步提亮」：白字需要更深的底才够对比 */
     [data-accent="ocean"] {
-      --accent: #1d4ed8; --accent-hover: #1e40af; --on-accent: #ffffff;
-      --accent-text: #1d4ed8;
+      --accent: #2563eb; --accent-hover: #1d4ed8; --on-accent: #ffffff;
+      --accent-text: #2563eb;
       --accent-tint-08: rgba(37,99,235,.08); --accent-tint-12: rgba(37,99,235,.12);
       --accent-tint-15: rgba(37,99,235,.15); --accent-tint-25: rgba(37,99,235,.25);
       --accent-tint-35: rgba(37,99,235,.35);
+      --heat-1: rgba(193,61,21,.18);
+      --heat-2: #c13d15;
+      --heat-2-fg: #ffffff;
     }
     [data-theme="dark"][data-accent="ocean"] {
-      --accent: #3b82f6; --accent-hover: #60a5fa; --on-accent: #0a1929; --accent-text: #60a5fa;
+      --accent: #60a5fa; --accent-hover: #93c5fd; --on-accent: #0a1929; --accent-text: #60a5fa;
+      --accent-tint-08: rgba(96,165,250,.14); --accent-tint-12: rgba(96,165,250,.14);
+      --accent-tint-15: rgba(96,165,250,.18); --accent-tint-25: rgba(96,165,250,.28);
+      --accent-tint-35: rgba(96,165,250,.38);
+      --heat-0: #2a2a2a;
+      --heat-1: rgba(193,61,21,.22);
+      --heat-2: #c13d15;
+      --heat-2-fg: #ffffff;
     }
     [data-accent="teal"] {
       --accent: #0f766e; --accent-hover: #115e59; --on-accent: #ffffff;
       --accent-text: #0f766e;
-      --accent-tint-08: rgba(13,148,136,.08); --accent-tint-12: rgba(13,148,136,.12);
-      --accent-tint-15: rgba(13,148,136,.15); --accent-tint-25: rgba(13,148,136,.25);
-      --accent-tint-35: rgba(13,148,136,.35);
+      --accent-tint-08: rgba(15,118,110,.08); --accent-tint-12: rgba(15,118,110,.12);
+      --accent-tint-15: rgba(15,118,110,.15); --accent-tint-25: rgba(15,118,110,.25);
+      --accent-tint-35: rgba(15,118,110,.35);
+      --heat-1: rgba(255,159,10,.22);
+      --heat-2: rgba(234,88,12,.90);
+      --heat-2-fg: #121212;
     }
     [data-theme="dark"][data-accent="teal"] {
-      --accent: #2dd4bf; --accent-hover: #5eead4; --on-accent: #032726; --accent-text: #2dd4bf;
+      --accent: #14b8a6; --accent-hover: #2dd4bf; --on-accent: #032726; --accent-text: #14b8a6;
+      --accent-tint-08: rgba(20,184,166,.14); --accent-tint-12: rgba(20,184,166,.14);
+      --accent-tint-15: rgba(20,184,166,.18); --accent-tint-25: rgba(20,184,166,.28);
+      --accent-tint-35: rgba(20,184,166,.38);
+      --heat-0: #2a2a2a;
+      --heat-1: rgba(255,159,10,.25);
+      --heat-2: rgba(234,88,12,.82);
+      --heat-2-fg: #ffffff;
     }
     [data-accent="sunset"] {
       --accent: #c2410c; --accent-hover: #9a3412; --on-accent: #ffffff;
       --accent-text: #c2410c;
-      --accent-tint-08: rgba(234,88,12,.08); --accent-tint-12: rgba(234,88,12,.12);
-      --accent-tint-15: rgba(234,88,12,.15); --accent-tint-25: rgba(234,88,12,.25);
-      --accent-tint-35: rgba(234,88,12,.35);
+      --accent-tint-08: rgba(194,65,12,.08); --accent-tint-12: rgba(194,65,12,.12);
+      --accent-tint-15: rgba(194,65,12,.15); --accent-tint-25: rgba(194,65,12,.25);
+      --accent-tint-35: rgba(194,65,12,.35);
+      --heat-1: rgba(220,38,38,.18);
+      --heat-2: #dc2626;
+      --heat-2-fg: #ffffff;
     }
     [data-theme="dark"][data-accent="sunset"] {
-      --accent: #f97316; --accent-hover: #fb923c; --on-accent: #2a1205; --accent-text: #fb923c;
+      --accent: #f97316; --accent-hover: #fb923c; --on-accent: #2a1205; --accent-text: #f97316;
+      --accent-tint-08: rgba(249,115,22,.14); --accent-tint-12: rgba(249,115,22,.14);
+      --accent-tint-15: rgba(249,115,22,.18); --accent-tint-25: rgba(249,115,22,.28);
+      --accent-tint-35: rgba(249,115,22,.38);
+      --heat-0: #2a2a2a;
+      --heat-1: rgba(220,38,38,.20);
+      --heat-2: rgba(220,38,38,.85);
+      --heat-2-fg: #ffffff;
     }
-    /* 设置面板的配色选择行 */
-    .accent-row { display: flex; gap: 8px; }
-    .accent-row .btn { flex: 1; justify-content: center; }
+    /* 设置面板的配色选择行：四个按钮与主题行同构（等宽铺满）；内距压缩以容纳 4 列，
+       窄屏（<~340px）改横向滚动而不是换行/裁切 */
+    .accent-row { display: flex; gap: var(--space-2); overflow-x: auto; }
+    .accent-row .btn { flex: 1 1 0; min-width: max-content; justify-content: center; padding-left: var(--space-2); padding-right: var(--space-2); }
     .accent-dot { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; }
-    .dot-green { background: #1db954; }
-    .dot-ocean { background: #3b82f6; }
-    .dot-teal { background: #2dd4bf; }
-    .dot-sunset { background: #f97316; }
+    /* 圆点始终用该配色「浅色模式」的值：它是色相标识，不随当前主题变 */
+    .dot-green { background: #15803d; }
+    .dot-ocean { background: #2563eb; }
+    .dot-teal { background: #0f766e; }
+    .dot-sunset { background: #c2410c; }
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
     /* N-16：键盘焦点必须可见。tap-highlight 抹掉了触屏反馈，这里补回键盘焦点环；
        用 :focus-visible 而非 :focus，鼠标点击不显示，只在键盘 / 辅助设备导航时出现 */
     :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-xs); }
-    /* 触屏设备上不显示焦点环（避免点按残留），键盘仍显示 */
-    @media (hover: none) and (pointer: coarse) {
-      :focus-visible { outline: none; }
-    }
+    /* F5（§8.9⑥）：浏览器原生表面也上色 —— 选区 / 光标 / 滚动条（Firefox） */
+    ::selection { background: var(--accent-tint-25); }
+    .input, .textarea { caret-color: var(--accent); }
+    html { scrollbar-color: var(--text-mute) transparent; }
+    /* 触屏设备曾在这里 outline:none，导致接蓝牙键盘 / 外接键鼠时完全看不到焦点。
+       tap-highlight 只影响触屏点按，键盘焦点必须保留 —— 两者不是同一个东西。 */
     html, body {
       margin: 0; padding: 0;
       background: var(--bg);
@@ -157,7 +225,6 @@
       padding-top: calc(14px + env(safe-area-inset-top));
     }
     .header h1 { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -.5px; }
-    .header .sub { color: var(--text-mute); font-size: 12px; font-weight: 500; }
     /* 圆形图标按钮：一套基础（主档 36px）—— header 图标 / 详情返回共用 */
     .icon-btn, .back-btn {
       color: var(--text); border: none;
@@ -179,6 +246,21 @@
     .header .right { margin-left: auto; display: flex; gap: 4px; }
     /* 眼睛按钮选中态（对外展示模式开启时高亮） */
     .icon-btn.on { background: var(--accent); color: var(--on-accent); }
+    /* F14（§9）：图标按钮统一提示 —— 用 ::before（::after 已被 44px 命中区占用，
+       两者混用会让弹出框继承 inset:-4px 被压扁裁切）。深底浅字、水平居中于图标、
+       hover / 键盘聚焦显示、不挡点击、不进布局 */
+    .icon-btn[data-tip]::before {
+      content: attr(data-tip);
+      position: absolute; top: calc(100% + 6px); left: 50%; right: auto; bottom: auto;
+      background: var(--text); color: var(--bg);
+      font-size: 12px; font-weight: 600; line-height: 1.4;
+      padding: var(--space-2) var(--space-3); border-radius: var(--radius-sm);
+      white-space: nowrap; pointer-events: none;
+      opacity: 0; transform: translateX(-50%) translateY(-2px);
+      transition: opacity .12s var(--ease), transform .12s var(--ease);
+      z-index: 60;
+    }
+    .icon-btn[data-tip]:hover::before, .icon-btn[data-tip]:focus-visible::before { opacity: 1; transform: translateX(-50%) translateY(0); }
 
     /* ============== 隐私项目模糊（blur） ============== */
     /* 内容区模糊：信息不可读但可选中提示；禁止选择防止复制泄露 */
@@ -223,10 +305,13 @@
     /* ============== Tabs ============== */
     /* 胶囊 tab：一套实现 —— 首页分类筛选 + 详情页日历切换共用 */
     .tabs, .cal-tabs { display: flex; overflow-x: auto; }
-    .tabs { gap: 8px; margin-bottom: 16px; padding-bottom: 4px; }
-    .cal-tabs { gap: 4px; margin-bottom: 8px; padding: 0 4px; }
+    /* F6（§8.9②）：胶囊命中区补到 44px（视觉不变）。容器补 4px 垂直内距，
+       ::after inset -4px 才恰好落在内距内，不会溢出 overflow 容器触发滚动条 */
+    .tabs { gap: 8px; margin-bottom: 12px; padding: 4px 0; }
+    .cal-tabs { gap: 4px; margin-bottom: 8px; padding: 4px; }
     .tab, .cal-tab {
       flex: 0 0 auto;
+      position: relative;
       padding: 8px 14px;
       background: transparent;
       color: var(--text-sub);
@@ -240,6 +325,7 @@
     .tab-n { opacity: .55; font-variant-numeric: tabular-nums; }
     .tab:hover, .cal-tab:hover { background: var(--tap); }
     .tab.active, .cal-tab.active { background: var(--text); color: var(--bg); }
+    .tab::after, .cal-tab::after { content: ''; position: absolute; inset: -4px 0; }
 
     /* ============== Project cards ============== */
     .project-grid { display: grid; gap: 16px; }
@@ -268,7 +354,7 @@
       padding: 6px 8px 6px 12px;
     }
     .cat-name { font-size: 14px; font-weight: 600; color: var(--text); flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .cat-num { font-size: 11px; color: var(--text-mute); margin-left: auto; font-variant-numeric: tabular-nums; }
+    .cat-num { font-size: 11px; color: var(--text-sub); margin-left: auto; font-variant-numeric: tabular-nums; }
     .cat-empty { font-size: 13px; color: var(--text-mute); padding: 12px; text-align: center; }
     .cat-add { flex: 0 0 auto; }
     /* 弹窗内的说明文案（替代内联 style）*/
@@ -278,7 +364,8 @@
     .dlg-note-sub b { color: var(--text); }
     /* ============== 排序模式（v5） ============== */
     .sort-hint {
-      font-size: 12px; color: var(--text-mute);
+      /* R3-02：text-mute 在 bg-elev 上只有 4.47:1，改 text-sub（7.1:1） */
+      font-size: 12px; color: var(--text-sub);
       background: var(--bg-elev);
       border-radius: var(--radius-sm);
       padding: 8px 12px; margin-bottom: 12px;
@@ -319,7 +406,7 @@
       background: var(--bg-elev); color: var(--text);
       border: 1px solid transparent; border-radius: 999px;
       padding: 9px 16px; font-size: 13px; font-weight: 600;
-      cursor: pointer; transition: all .12s;
+      cursor: pointer; transition: background-color .12s var(--ease), color .12s var(--ease), border-color .12s var(--ease), opacity .12s var(--ease);
       display: inline-flex; align-items: center; justify-content: center; gap: 6px;
       font-family: inherit;
       line-height: 1;
@@ -337,12 +424,19 @@
     .btn > * { display: inline-flex; align-items: center; line-height: 1; }
     .btn:hover { background: var(--tap); }
     .btn.primary { background: var(--accent); color: var(--on-accent); }
-    .btn.primary:hover { background: var(--accent-hover); transform: scale(1.01); }
+    .btn.primary:hover { background: var(--accent-hover); }
+    /* 记录破戒是负向事件，不能用代表成功 / 通过的品牌绿。
+       用中性深色实心：保留按钮的视觉重量（不至于变成弱化的次要按钮），但不传递"做对了"的语义。
+       绿色留给真正正向的操作：新建项目、达成目标、进度条。 */
+    .btn.log { background: var(--text); color: var(--bg); }
+    .btn.log:hover { background: var(--text-sub); }
     .btn.danger { color: var(--danger); }
     .btn.ghost { background: transparent; }
     .btn.small { padding: 6px 12px; font-size: 12px; }
     .btn.block { width: 100%; justify-content: center; padding: 12px; font-size: 14px; }
     .btn:disabled { opacity: .4; cursor: not-allowed; }
+    /* F4（§8.7）：按压反馈 —— 按下轻微内收、90ms 快曲线；hover 不再放大 */
+    .btn:active { transform: scale(.985); transition-duration: .09s; }
     /* 选中态（设置弹窗主题三选一等场景） */
     .btn.active { background: var(--text); color: var(--bg); }
 
@@ -369,7 +463,9 @@
       background: var(--bg-card); border: 1px solid var(--border);
       border-radius: var(--radius); padding: 16px;
     }
-    .stat .label { font-size: 12px; color: var(--text-mute); font-weight: 600; text-transform: uppercase; letter-spacing: .5px; }
+    /* uppercase 对中文无效，但 letter-spacing 会把「历史最长」这类中文的字距拉开，
+       看起来像"设计感"，实际是照抄英文规范留下的副作用。中文界面两者都去掉。 */
+    .stat .label { font-size: 12px; color: var(--text-mute); font-weight: 600; }
     .stat .value { font-size: 22px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; }
     .stat .sub { font-size: 12px; color: var(--text-sub); margin-top: 2px; }
     .big-timer {
@@ -389,7 +485,6 @@
     .big-timer .since { color: var(--text-sub); font-size: 13px; margin-top: 8px; }
     .section-title {
       font-size: 13px; font-weight: 700; color: var(--text-sub);
-      text-transform: uppercase; letter-spacing: 1px;
       margin: 24px 0 10px;
     }
 
@@ -441,7 +536,7 @@
       aspect-ratio: 1 / 1;
       display: flex; align-items: center; justify-content: center;
       font-size: 12px; font-weight: 500;
-      border-radius: 6px; position: relative;
+      border-radius: var(--radius-xs); position: relative;
       color: var(--text-sub);
       font-variant-numeric: tabular-nums;
     }
@@ -453,7 +548,7 @@
       font-size: 10px; font-weight: 700; line-height: 1;
       color: var(--text-sub);
     }
-    .cal-day.lv-2 .cal-count { color: #fff; }
+    .cal-day.lv-2 .cal-count { color: var(--heat-2-fg); }
 
     /* ============== Modal ============== */
     .modal-back {
@@ -483,6 +578,13 @@
     /* N-15：表单标签必须是 <label for="..."> 才能给输入框提供可访问名称；
        分组标题（主题 / 配色 / 分类 / 数据管理）不是控件标签，改用 .field-label */
     .field label, .field-label { display: block; font-size: 12px; color: var(--text-sub); font-weight: 600; margin-bottom: 6px; }
+    /* F12：表单辅助说明（替代内联 style；事实信息保留、机制解释删除） */
+    .field-help { font-size: 12px; color: var(--text-mute); margin-top: var(--space-1); }
+    /* 设置页脚：「关于」块（居中、分层：名称 / 版本 / 数据说明）；版本号不显示 schema 版本 */
+    .settings-about { text-align: center; padding: var(--space-1) 0 var(--space-2); }
+    .settings-about-name { font-size: 13px; font-weight: 700; color: var(--text-sub); letter-spacing: -.2px; }
+    .settings-about-ver { font-size: 11px; color: var(--text-mute); margin-top: 2px; font-variant-numeric: tabular-nums; }
+    .settings-about-note { margin: var(--space-2) auto 0; max-width: 34em; font-size: 11px; color: var(--text-mute); line-height: 1.6; }
     /* N-19：iOS Safari 在 font-size < 16px 时聚焦输入框会自动放大整页 */
     .input, .textarea {
       width: 100%;
@@ -509,7 +611,7 @@
       width: 36px; height: 36px;
       display: inline-flex; align-items: center; justify-content: center;
       font-size: 22px;
-      background: transparent; border: none; border-radius: 6px;
+      background: transparent; border: none; border-radius: var(--radius-xs);
       cursor: pointer;
       transition: background .12s, transform .12s;
     }
@@ -538,7 +640,7 @@
     .poster-goal.done { color: var(--accent); font-weight: 600; }
     .poster-cmp { display: flex; gap: 12px; border-top: 1px solid #282828; padding-top: 14px; }
     .pd-col { flex: 1; min-width: 0; }
-    .pd-label { font-size: 11px; color: #6a6a6a; }
+    .pd-label { font-size: 11px; color: #9a9a9a; }
     .pd-val { font-size: 24px; font-weight: 800; font-variant-numeric: tabular-nums; margin-top: 2px; }
     .pd-sub { font-size: 11px; color: #b3b3b3; margin-top: 2px; }
     .pd-good { color: #4ade80; font-weight: 700; }
@@ -548,7 +650,7 @@
     .pb-head { font-size: 12px; color: #b3b3b3; }
     .pb-head b { color: #ffffff; }
     .pb-icons { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; font-size: 20px; }
-    .poster-foot { font-size: 10px; color: #6a6a6a; text-align: center; border-top: 1px solid #282828; padding-top: 12px; }
+    .poster-foot { font-size: 10px; color: #9a9a9a; text-align: center; border-top: 1px solid #282828; padding-top: 12px; }
 
     /* ============== 破戒原因标签选择器（A1） ============== */
     .tag-picker { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -562,7 +664,7 @@
       color: var(--text-sub);
       cursor: pointer;
       font-family: inherit;
-      transition: all .12s;
+      transition: background-color .12s, border-color .12s, color .12s;
       line-height: 1.2;
       position: relative;
     }
@@ -581,7 +683,8 @@
     /* 历史记录行内的小标签 */
     .hi-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
     .hi-tag {
-      background: var(--accent-tint-12);
+      /* R3-02：tint-12 作底时 accent-text 只有 4.27:1，降一档 tint 到 4.5 以上 */
+      background: var(--accent-tint-08);
       color: var(--accent-text);
       font-size: 11px;
       font-weight: 600;
@@ -655,21 +758,30 @@
       border-radius: var(--radius-xs);
       margin-bottom: 4px;
     }
-    .tag-ach { background: var(--accent-tint-15); color: var(--accent-text); }
-    .tag-imp { background: rgba(255,159,10,.15); color: #d97706; }
-    .tag-next { background: rgba(59,130,246,.15); color: #2563eb; }
-    [data-theme="dark"] .tag-imp { color: #fbbf24; }
-    [data-theme="dark"] .tag-next { color: #60a5fa; }
+    .tag-ach { background: var(--accent-tint-08); color: var(--accent-text); }
+    .tag-imp { background: var(--tag-imp-bg); color: var(--tag-imp-fg); }
+    .tag-next { background: var(--tag-next-bg); color: var(--tag-next-fg); }
     .rv-text { font-size: 14px; line-height: 1.5; color: var(--text); white-space: pre-wrap; word-wrap: break-word; }
+
+    /* ============== 复盘独立视图（F2：替代底部抽屉，§12.1 长书写用独立视图） ============== */
+    /* 三个文本框均分剩余高度、保存条贴底 —— 不再出现按钮下方的大片空白 */
+    .review-view { display: flex; flex-direction: column; min-height: calc(100vh - 160px); }
+    .review-view .detail-head { margin-bottom: 12px; }
+    .review-fields { flex: 1; display: flex; flex-direction: column; gap: var(--space-3); }
+    .review-fields .field { display: flex; flex-direction: column; margin: 0; min-height: 0; }
+    .review-fields .field.review-cycle { flex: 0 0 auto; }
+    .review-fields .field:not(.review-cycle) { flex: 1 1 0; }
+    .review-fields .textarea { flex: 1; min-height: 88px; }
+    .review-savebar { display: flex; gap: var(--space-2); padding: var(--space-3) 0 calc(var(--space-3) + env(safe-area-inset-bottom)); }
+    .review-savebar .btn.primary { flex: 1; }
 
     /* ============== 日历 tab + 热力图 ============== */
 
-    /* 月历格子按破戒次数上色 */
+    /* 月历格子按破戒次数上色（F7 + 热力方案：走 --heat-* 语义 token，按配色配对；
+       暖色 = 强度/警示，不用品牌色相 —— 负向数据用成就绿会被误读） */
     .cal-day.lv-0 { background: transparent; }
-    .cal-day.lv-1 { background: rgba(255,159,10,.22); color: var(--text); font-weight: 600; }
-    .cal-day.lv-2 { background: rgba(234,88,12,.85); color: #fff; font-weight: 700; }
-    [data-theme="dark"] .cal-day.lv-1 { background: rgba(255,159,10,.25); }
-    [data-theme="dark"] .cal-day.lv-2 { background: rgba(234,88,12,.82); }
+    .cal-day.lv-1 { background: var(--heat-1); color: var(--text); font-weight: 600; }
+    .cal-day.lv-2 { background: var(--heat-2); color: var(--heat-2-fg); font-weight: 700; }
     /* 注：这里用 box-shadow 实现"今日描边"，语义是 outline 而非阴影 */
     .cal-day.today { box-shadow: inset 0 0 0 2px var(--accent); }
     .cal-day.muted { background: transparent !important; }
@@ -690,12 +802,9 @@
     }
     .hm-cell:hover { transform: scale(1.3); outline: 1px solid var(--text-mute); z-index: 2; position: relative; }
     .hm-cell.future { background: transparent; pointer-events: none; }
-    .hm-cell.lv-0 { background: var(--bg-elev); }
-    .hm-cell.lv-1 { background: rgba(255,159,10,.30); }
-    .hm-cell.lv-2 { background: rgba(234,88,12,.85); }
-    [data-theme="dark"] .hm-cell.lv-0 { background: #2a2a2a; }
-    [data-theme="dark"] .hm-cell.lv-1 { background: rgba(255,159,10,.32); }
-    [data-theme="dark"] .hm-cell.lv-2 { background: rgba(234,88,12,.82); }
+    .hm-cell.lv-0 { background: var(--heat-0); }
+    .hm-cell.lv-1 { background: var(--heat-1); }
+    .hm-cell.lv-2 { background: var(--heat-2); }
     .heatmap-months {
       display: grid;
       grid-auto-flow: column;
@@ -804,9 +913,22 @@
       .badge-name { font-size: 9px; }
     }
 
+    /* R3-15：预置列表外的原因标签只读 chip（保存时保留，不可增删） */
+    .tag-opt.static { cursor: default; opacity: .85; }
+
     /* ============== Misc ============== */
     .row { display: flex; align-items: center; gap: 8px; }
     .divider { height: 1px; background: var(--border); margin: 16px 0; }
+
+    /* R3-07：前庭敏感用户可关动画 —— 系统开启"减弱动态效果"时动画与过渡全部趋零
+       （第 1 轮 A2 清账；弹窗 / toast / 横幅的 5 个 keyframes 全部被覆盖） */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: .01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: .01ms !important;
+      }
+    }
 
     @media (max-width: 480px) {
       .pc-time { font-size: 32px; }
@@ -819,17 +941,16 @@
   <div class="app">
     <header class="header">
       <div>
-        <h1 id="app-title">戒断</h1>
-        <div class="sub" id="app-sub">习惯追踪 · 你的数据只属于你</div>
+        <h1>戒断</h1>
       </div>
       <div class="right">
-        <button class="icon-btn" id="demo-btn" aria-label="对外展示模式" title="对外展示模式：一键隐藏所有隐私项目">
+        <button class="icon-btn" id="demo-btn" aria-label="对外展示模式" data-tip="对外展示模式">
           <svg id="demo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
         </button>
-        <button class="icon-btn" id="theme-btn" aria-label="切换主题">
+        <button class="icon-btn" id="theme-btn" aria-label="切换主题" data-tip="切换到深色主题">
           <svg id="theme-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
         </button>
-        <button class="icon-btn" id="settings-btn" aria-label="设置">
+        <button class="icon-btn" id="settings-btn" aria-label="设置" data-tip="设置">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
         </button>
       </div>
